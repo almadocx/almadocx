@@ -23,8 +23,8 @@ function isWordChar(ch: string): boolean {
 }
 
 function wholeWordAt(text: string, start: number, end: number): boolean {
-  const before = start === 0 ? '' : text[start - 1] ?? ''
-  const after = end >= text.length ? '' : text[end] ?? ''
+  const before = start === 0 ? '' : text[start - 1]!
+  const after = end >= text.length ? '' : text[end]!
   const leftOk = !before || !isWordChar(before)
   const rightOk = !after || !isWordChar(after)
   return leftOk && rightOk
@@ -158,7 +158,7 @@ export function extractPlainRange(doc: Document, range: DocRange): string {
     return parts.join('\n')
   }
   if (start.blockIndex === end.blockIndex) {
-    const block = doc.sections[start.sectionIndex]?.blocks[start.blockIndex]
+    const block = doc.sections[start.sectionIndex]!.blocks[start.blockIndex]
     if (!block) return ''
     if (block.type === 'table' && start.cell && end.cell) {
       // Order endpoints so iteration runs start → end regardless of selection direction.
@@ -202,8 +202,7 @@ export function extractPlainRange(doc: Document, range: DocRange): string {
     if (block.type !== 'paragraph') return ''
     return paragraphPlainText(block).slice(start.offset, end.offset)
   }
-  const section = doc.sections[start.sectionIndex]
-  if (!section) return ''
+  const section = doc.sections[start.sectionIndex]!
   const parts: string[] = []
   for (let bi = start.blockIndex; bi <= end.blockIndex; bi++) {
     const block = section.blocks[bi]

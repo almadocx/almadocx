@@ -160,18 +160,20 @@ function hitTestInParagraphs(
       best = para
     }
   }
-  if (!best || best.lines.length === 0) {
+  // paras is non-empty, so the score loop always picks a best paragraph.
+  const chosen = best!
+  if (chosen.lines.length === 0) {
     const pos: DocPosition = {
-      sectionIndex: best?.sectionIndex ?? 0,
-      blockIndex: best?.blockIndex ?? 0,
+      sectionIndex: chosen.sectionIndex,
+      blockIndex: chosen.blockIndex,
       offset: 0,
     }
-    if (best?.cell) pos.cell = { ...best.cell }
+    if (chosen.cell) pos.cell = { ...chosen.cell }
     return pos
   }
 
-  let line = best.lines[0]!
-  for (const l of best.lines) {
+  let line = chosen.lines[0]!
+  for (const l of chosen.lines) {
     if (y >= l.y) line = l
   }
   for (const run of line.runs) {
@@ -179,20 +181,20 @@ function hitTestInParagraphs(
       const ratio = run.width === 0 ? 0 : Math.max(0, Math.min(1, (x - run.x) / run.width))
       const local = Math.round(ratio * (run.text.length || 1))
       const pos: DocPosition = {
-        sectionIndex: best.sectionIndex,
-        blockIndex: best.blockIndex,
+        sectionIndex: chosen.sectionIndex,
+        blockIndex: chosen.blockIndex,
         offset: run.startOffset + local,
       }
-      if (best.cell) pos.cell = { ...best.cell }
+      if (chosen.cell) pos.cell = { ...chosen.cell }
       return pos
     }
   }
   const pos: DocPosition = {
-    sectionIndex: best.sectionIndex,
-    blockIndex: best.blockIndex,
+    sectionIndex: chosen.sectionIndex,
+    blockIndex: chosen.blockIndex,
     offset: line.endOffset,
   }
-  if (best.cell) pos.cell = { ...best.cell }
+  if (chosen.cell) pos.cell = { ...chosen.cell }
   return pos
 }
 
@@ -215,7 +217,7 @@ export function wordBounds(text: string, offset: number): { start: number; end: 
     start = o - 1
     end = o
     while (start > 0 && isWord(text[start - 1]!)) start -= 1
-    while (end < text.length && isWord(text[end]!)) end += 1
+    // end already sits on a non-word (or past the last char); no forward expand
   } else {
     while (start > 0 && !isWord(text[start - 1]!) && text[start - 1] !== '\n') start -= 1
     while (end < text.length && !isWord(text[end]!) && text[end] !== '\n') end += 1

@@ -30,7 +30,7 @@ export function twipsToHm(twips: number): number {
 
 export function parseOdfLengthToTwips(value: string | undefined): number | undefined {
   if (value === undefined || value === '') return undefined
-  const m = /^(-?\d+(?:\.\d+)?)(cm|mm|in|pt|pc|px)?$/i.exec(value.trim())
+  const m = /^(-?\d+(?:\.\d+)?)([a-z]+)?$/i.exec(value.trim())
   if (!m) return undefined
   const n = Number(m[1])
   const unit = (m[2] ?? 'pt').toLowerCase()

@@ -6,7 +6,7 @@ import type {
   NumberingLevel,
 } from '../../model/types.js'
 import { emptyNumbering, ensureDefaultNumbering } from '../../model/types.js'
-import { asArray, parseXml, xmlAttr } from '../../io/xml.js'
+import { asArray, parseXml, xmlAttrAlt, xmlAttrAltOr } from '../../io/xml.js'
 
 function local(name: string): string {
   const i = name.indexOf(':')
@@ -54,29 +54,29 @@ export function parseNumberingXml(xml: string | undefined): NumberingDefinitions
 
   for (const node of findChildren(numbering, 'abstractNum')) {
     const a = node as Record<string, unknown>
-    const id = xmlAttr(a, 'w:abstractNumId') ?? xmlAttr(a, 'abstractNumId')
+    const id = xmlAttrAlt(a, 'w:abstractNumId', 'abstractNumId')
     if (!id) continue
     const levels: NumberingLevel[] = []
     for (const lvlNode of findChildren(a, 'lvl')) {
       const lvl = lvlNode as Record<string, unknown>
-      const ilvl = Number(xmlAttr(lvl, 'w:ilvl') ?? xmlAttr(lvl, 'ilvl') ?? '0')
+      const ilvl = Number(xmlAttrAltOr(lvl, '0', 'w:ilvl', 'ilvl'))
       const startNode = findChild(lvl, 'start') as Record<string, unknown> | undefined
       const numFmtNode = findChild(lvl, 'numFmt') as Record<string, unknown> | undefined
       const lvlTextNode = findChild(lvl, 'lvlText') as Record<string, unknown> | undefined
       const pPr = findChild(lvl, 'pPr') as Record<string, unknown> | undefined
       const ind = pPr ? (findChild(pPr, 'ind') as Record<string, unknown> | undefined) : undefined
-      const left = ind ? Number(xmlAttr(ind, 'w:left') ?? xmlAttr(ind, 'left') ?? '720') : 720
-      const hanging = ind ? Number(xmlAttr(ind, 'w:hanging') ?? xmlAttr(ind, 'hanging') ?? '360') : 360
+      const left = ind ? Number(xmlAttrAltOr(ind, '720', 'w:left', 'left')) : 720
+      const hanging = ind ? Number(xmlAttrAltOr(ind, '360', 'w:hanging', 'hanging')) : 360
       const rPr = findChild(lvl, 'rPr') as Record<string, unknown> | undefined
       const rFonts = rPr ? (findChild(rPr, 'rFonts') as Record<string, unknown> | undefined) : undefined
       const fontFamily = rFonts
-        ? xmlAttr(rFonts, 'w:ascii') ?? xmlAttr(rFonts, 'ascii')
+        ? xmlAttrAlt(rFonts, 'w:ascii', 'ascii')
         : undefined
       const level: NumberingLevel = {
         ilvl,
-        format: mapNumFmt(xmlAttr(numFmtNode, 'w:val') ?? xmlAttr(numFmtNode, 'val')),
-        levelText: xmlAttr(lvlTextNode, 'w:val') ?? xmlAttr(lvlTextNode, 'val') ?? '%1.',
-        start: Number(xmlAttr(startNode, 'w:val') ?? xmlAttr(startNode, 'val') ?? '1'),
+        format: mapNumFmt(xmlAttrAlt(numFmtNode, 'w:val', 'val')),
+        levelText: xmlAttrAltOr(lvlTextNode, '%1.', 'w:val', 'val'),
+        start: Number(xmlAttrAltOr(startNode, '1', 'w:val', 'val')),
         indentLeft: left,
         hanging,
       }
@@ -89,16 +89,16 @@ export function parseNumberingXml(xml: string | undefined): NumberingDefinitions
 
   for (const node of findChildren(numbering, 'num')) {
     const n = node as Record<string, unknown>
-    const numId = xmlAttr(n, 'w:numId') ?? xmlAttr(n, 'numId')
+    const numId = xmlAttrAlt(n, 'w:numId', 'numId')
     const absNode = findChild(n, 'abstractNumId') as Record<string, unknown> | undefined
-    const abstractNumId = xmlAttr(absNode, 'w:val') ?? xmlAttr(absNode, 'val')
+    const abstractNumId = xmlAttrAlt(absNode, 'w:val', 'val')
     if (!numId || !abstractNumId) continue
     const startOverrides: Record<number, number> = {}
     for (const ov of findChildren(n, 'lvlOverride')) {
       const o = ov as Record<string, unknown>
-      const ilvl = Number(xmlAttr(o, 'w:ilvl') ?? xmlAttr(o, 'ilvl') ?? '0')
+      const ilvl = Number(xmlAttrAltOr(o, '0', 'w:ilvl', 'ilvl'))
       const startOv = findChild(o, 'startOverride') as Record<string, unknown> | undefined
-      const val = xmlAttr(startOv, 'w:val') ?? xmlAttr(startOv, 'val')
+      const val = xmlAttrAlt(startOv, 'w:val', 'val')
       if (val) startOverrides[ilvl] = Number(val)
     }
     const inst: NumberingInstance = { numId, abstractNumId }

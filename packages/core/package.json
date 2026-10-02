@@ -13,20 +13,24 @@
   },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
     "test:watch": "vitest",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "lint": "eslint src tests"
+    "lint": "eslint src"
   },
   "dependencies": {
-    "fflate": "^0.8.2",
-    "fast-xml-parser": "^5.2.5"
+    "fast-xml-parser": "^5.2.5",
+    "fflate": "^0.8.2"
   },
   "devDependencies": {
-    "@types/node": "^24.5.2",
+    "@types/node": "^24.19.0",
+    "@vitest/coverage-v8": "^3.2.7",
     "fast-check": "^4.3.0",
     "vitest": "^3.2.4"
   }

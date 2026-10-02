@@ -216,8 +216,7 @@ export function layoutDocument(doc: Document, options: LayoutOptions = {}): Layo
               const chunk = chunks[c]!
               // fit===0 reflows the whole para to contentTop — must start a new page
               // or it will paint over content already on this page.
-              const startsNewPage =
-                c > 0 || (currentBlocks.length > 0 && chunk.y <= contentTop + 1)
+              const startsNewPage = c > 0 || currentBlocks.length > 0
               if (startsNewPage && currentBlocks.length > 0) {
                 flushPage()
                 reflowParagraphY(chunk, contentTop)
@@ -236,7 +235,7 @@ export function layoutDocument(doc: Document, options: LayoutOptions = {}): Layo
           const chunks = splitParagraphAcrossPages(laid, contentTop, contentBottom)
           for (let c = 0; c < chunks.length; c++) {
             const chunk = chunks[c]!
-            if (c > 0 || (currentBlocks.length > 0 && chunk.y <= contentTop + 1)) {
+            if (c > 0 || currentBlocks.length > 0) {
               if (currentBlocks.length > 0) flushPage()
               reflowParagraphY(chunk, contentTop)
             }
@@ -391,7 +390,7 @@ function splitParagraphWidowAware(
   contentTop: number,
   contentBottom: number,
 ): LayoutParagraph[] {
-  const avail = contentBottom - (para.y > contentTop ? para.y : contentTop)
+  const avail = contentBottom - Math.max(para.y, contentTop)
   let fit = 0
   let used = 0
   for (const line of para.lines) {
@@ -412,7 +411,6 @@ function splitParagraphWidowAware(
     reflowParagraphY(moved, contentTop)
     return [moved]
   }
-  if (fit >= para.lines.length) return [para]
 
   const firstLines = para.lines.slice(0, fit)
   const secondLines = para.lines.slice(fit)
@@ -569,7 +567,7 @@ function layoutParagraphBlock(
         font,
         color,
         startOffset: offset,
-        tabLeader: stop.leader ?? 'none',
+        tabLeader: stop.leader,
         ...(resolved.bold ? { bold: true } : {}),
         ...(resolved.italic ? { italic: true } : {}),
       })
@@ -583,8 +581,6 @@ function layoutParagraphBlock(
     if (run.content.type !== 'text') {
       const metrics = ctx.measurer.measure(' ', font)
       const w = metrics.width
-      const avail = width - (isFirstLine ? Math.max(0, indentFirst) : 0)
-      if (lineWidth + w > avail && lineRuns.length > 0) flushLine(offset)
       lineRuns.push({
         text,
         x: lineWidth,
@@ -652,7 +648,6 @@ function layoutParagraphBlock(
             hi = mid - 1
           }
         }
-        if (fit < 1) fit = 1
         const piece = remaining.slice(0, fit)
         const pieceMetrics = ctx.measurer.measure(piece, font)
         lineRuns.push({
@@ -799,9 +794,9 @@ function layoutTableBlock(
         continue
       }
       let cellX = x
-      for (let i = 0; i < col; i++) cellX += colWidths[i] ?? 0
+      for (let i = 0; i < col; i++) cellX += colWidths[i]!
       let cellW = 0
-      for (let i = col; i < col + span; i++) cellW += colWidths[i] ?? 0
+      for (let i = col; i < col + span; i++) cellW += colWidths[i]!
 
       const marginTop = padPx(cell.props.margin?.top)
       const marginBottom = padPx(cell.props.margin?.bottom)
@@ -1012,8 +1007,8 @@ export function patchLayoutParagraph(
     return b
   })
 
-  const last = newBlocks[newBlocks.length - 1]
-  const pageBottom = last ? last.y + last.height : 0
+  const last = newBlocks[newBlocks.length - 1]!
+  const pageBottom = last.y + last.height
   const overflows = pageBottom > contentBottom + 1
   const underflows = dy < 0 && pageIndex < layout.pages.length - 1
 
@@ -1022,7 +1017,11 @@ export function patchLayoutParagraph(
     blocks: newBlocks,
     paragraphs: newBlocks.filter((b): b is LayoutParagraph => b.kind === 'paragraph'),
   }
-  const pages = layout.pages.map((p, i) => (i === pageIndex ? newPage : p))
+  // Copy pages array; when only one page the map still visits the sole entry.
+  const pages: LayoutPage[] = []
+  for (let i = 0; i < layout.pages.length; i++) {
+    pages.push(i === pageIndex ? newPage : layout.pages[i]!)
+  }
   return {
     layout: { pages },
     needsFullLayout: overflows || underflows || Math.abs(dy) > 0.5,
@@ -1133,7 +1132,10 @@ export function patchLayoutCellParagraph(
     blocks: newBlocks,
     paragraphs: newBlocks.filter((b): b is LayoutParagraph => b.kind === 'paragraph'),
   }
-  const pages = layout.pages.map((p, i) => (i === pageIndex ? newPage : p))
+  const pages: LayoutPage[] = []
+  for (let i = 0; i < layout.pages.length; i++) {
+    pages.push(i === pageIndex ? newPage : layout.pages[i]!)
+  }
 
   return {
     layout: { pages },
@@ -1145,12 +1147,15 @@ export function patchLayoutCellParagraph(
 
 function shiftParagraphY(para: LayoutParagraph, y: number): LayoutParagraph {
   const dy = y - para.y
-  return {
+  const next: LayoutParagraph = {
     ...para,
     y,
     lines: para.lines.map((l) => ({ ...l, y: l.y + dy })),
-    ...(para.marker ? { marker: { ...para.marker, y: para.marker.y + dy } } : {}),
   }
+  if (para.marker) {
+    next.marker = { ...para.marker, y: para.marker.y + dy }
+  }
+  return next
 }
 
 function shiftTableLayoutY(table: LayoutTable, y: number): LayoutTable {

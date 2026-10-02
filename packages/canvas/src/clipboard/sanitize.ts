@@ -129,7 +129,7 @@ function tagProps(tag: string, el: Element, base: CharacterProps): CharacterProp
 
 function sanitizeNode(node: Node, into: Element): void {
   if (node.nodeType === Node.TEXT_NODE) {
-    into.appendChild(document.createTextNode(node.textContent ?? ''))
+    into.appendChild(document.createTextNode(node.textContent!))
     return
   }
   if (node.nodeType !== Node.ELEMENT_NODE) return
@@ -182,7 +182,7 @@ function walk(
   current: { p: Paragraph },
 ): void {
   if (node.nodeType === Node.TEXT_NODE) {
-    const text = node.textContent ?? ''
+    const text = node.textContent!
     if (text) current.p.runs.push(createTextRun(text, props))
     return
   }
@@ -207,7 +207,8 @@ function walk(
     const nextProps = tagProps(tag, el, props)
     if (/^H[1-6]$/.test(tag)) {
       nextProps.bold = true
-      nextProps.fontSizePt = 24 - (Number(tag[1]) - 1) * 2
+      const fontSizePt = 24 - (Number(tag[1]) - 1) * 2
+      nextProps.fontSizePt = fontSizePt
       current.p = createEmptyParagraph(`Heading${tag[1]!}`)
       current.p.runs = []
     }
@@ -217,13 +218,14 @@ function walk(
     if (current.p.runs.length === 0) current.p.runs.push(createTextRun(''))
     // Ensure heading character props landed on runs
     if (/^H[1-6]$/.test(tag)) {
+      const fontSizePt = nextProps.fontSizePt!
       current.p.runs = current.p.runs.map((r) => ({
         ...r,
         props: {
           ...nextProps,
           ...r.props,
           bold: true,
-          ...(nextProps.fontSizePt !== undefined ? { fontSizePt: nextProps.fontSizePt } : {}),
+          fontSizePt,
         },
       }))
     }
@@ -270,9 +272,6 @@ export function htmlToFragment(html: string): PastedFragment {
   if (current.p.runs.length > 0) paragraphs.push(current.p)
   if (paragraphs.length === 0) {
     paragraphs.push(createEmptyParagraph())
-  }
-  for (const p of paragraphs) {
-    if (p.runs.length === 0) p.runs.push(createTextRun(''))
   }
   return { paragraphs }
 }

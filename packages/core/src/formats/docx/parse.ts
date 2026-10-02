@@ -17,7 +17,7 @@ import {
 } from '../../model/types.js'
 import { createTextRun } from '../../model/text.js'
 import { isMacroPath, readZip, zipText, type ZipEntries } from '../../io/zip.js'
-import { asArray, parseXml, xmlAttr, xmlText } from '../../io/xml.js'
+import { asArray, parseXml, xmlAttrAlt, xmlText, xmlAttrAltOr } from '../../io/xml.js'
 import { nextId } from '../../util/id.js'
 import { assert } from '../../util/assert.js'
 import { parseNumberingXml } from './numbering.js'
@@ -56,44 +56,41 @@ function parseRunProps(rPr: Record<string, unknown> | undefined): CharacterProps
   const props: CharacterProps = {}
   if (findChild(rPr, 'b') !== undefined) {
     const b = findChild(rPr, 'b') as Record<string, unknown> | string
-    const val = typeof b === 'object' ? xmlAttr(b, 'w:val') ?? xmlAttr(b, 'val') : undefined
+    const val = typeof b === 'object' ? xmlAttrAlt(b, 'w:val', 'val') : undefined
     const on = parseOnOff(val)
     if (on !== undefined) props.bold = on
   }
   if (findChild(rPr, 'i') !== undefined) {
     const i = findChild(rPr, 'i') as Record<string, unknown> | string
-    const val = typeof i === 'object' ? xmlAttr(i, 'w:val') ?? xmlAttr(i, 'val') : undefined
+    const val = typeof i === 'object' ? xmlAttrAlt(i, 'w:val', 'val') : undefined
     const on = parseOnOff(val)
     if (on !== undefined) props.italic = on
   }
   if (findChild(rPr, 'u') !== undefined) {
     const u = findChild(rPr, 'u') as Record<string, unknown>
-    const val = xmlAttr(u, 'w:val') ?? xmlAttr(u, 'val')
+    const val = xmlAttrAlt(u, 'w:val', 'val')
     props.underline = val !== 'none'
   }
   if (findChild(rPr, 'strike') !== undefined) props.strike = true
   const sz = findChild(rPr, 'sz') as Record<string, unknown> | undefined
   if (sz) {
-    const v = xmlAttr(sz, 'w:val') ?? xmlAttr(sz, 'val')
+    const v = xmlAttrAlt(sz, 'w:val', 'val')
     if (v) props.fontSizePt = Number(v) / 2
   }
   const color = findChild(rPr, 'color') as Record<string, unknown> | undefined
   if (color) {
-    const c = parseColor(xmlAttr(color, 'w:val') ?? xmlAttr(color, 'val'))
+    const c = parseColor(xmlAttrAlt(color, 'w:val', 'val'))
     if (c) props.color = c
   }
   const rFonts = findChild(rPr, 'rFonts') as Record<string, unknown> | undefined
   if (rFonts) {
     const ascii =
-      xmlAttr(rFonts, 'w:ascii') ??
-      xmlAttr(rFonts, 'ascii') ??
-      xmlAttr(rFonts, 'w:hAnsi') ??
-      xmlAttr(rFonts, 'hAnsi')
+      xmlAttrAlt(rFonts, 'w:ascii', 'ascii', 'w:hAnsi', 'hAnsi')
     if (ascii) props.fontFamily = ascii
   }
   const vert = findChild(rPr, 'vertAlign') as Record<string, unknown> | undefined
   if (vert) {
-    const v = xmlAttr(vert, 'w:val') ?? xmlAttr(vert, 'val')
+    const v = xmlAttrAlt(vert, 'w:val', 'val')
     if (v === 'superscript' || v === 'subscript') props.verticalAlign = v
   }
   return props
@@ -104,22 +101,22 @@ function parseParagraphProps(pPr: Record<string, unknown> | undefined): Paragrap
   const props: ParagraphProps = {}
   const pStyle = findChild(pPr, 'pStyle') as Record<string, unknown> | undefined
   if (pStyle) {
-    const id = xmlAttr(pStyle, 'w:val') ?? xmlAttr(pStyle, 'val')
+    const id = xmlAttrAlt(pStyle, 'w:val', 'val')
     if (id) props.styleId = id
   }
   const jc = findChild(pPr, 'jc') as Record<string, unknown> | undefined
   if (jc) {
-    const v = xmlAttr(jc, 'w:val') ?? xmlAttr(jc, 'val')
+    const v = xmlAttrAlt(jc, 'w:val', 'val')
     if (v === 'left' || v === 'center' || v === 'right' || v === 'both') {
       props.alignment = v === 'both' ? 'justify' : v
     }
   }
   const ind = findChild(pPr, 'ind') as Record<string, unknown> | undefined
   if (ind) {
-    const left = xmlAttr(ind, 'w:left') ?? xmlAttr(ind, 'left')
-    const right = xmlAttr(ind, 'w:right') ?? xmlAttr(ind, 'right')
-    const first = xmlAttr(ind, 'w:firstLine') ?? xmlAttr(ind, 'firstLine')
-    const hanging = xmlAttr(ind, 'w:hanging') ?? xmlAttr(ind, 'hanging')
+    const left = xmlAttrAlt(ind, 'w:left', 'left')
+    const right = xmlAttrAlt(ind, 'w:right', 'right')
+    const first = xmlAttrAlt(ind, 'w:firstLine', 'firstLine')
+    const hanging = xmlAttrAlt(ind, 'w:hanging', 'hanging')
     if (left) props.indentLeft = Number(left)
     if (right) props.indentRight = Number(right)
     if (first) props.indentFirstLine = Number(first)
@@ -127,10 +124,10 @@ function parseParagraphProps(pPr: Record<string, unknown> | undefined): Paragrap
   }
   const spacing = findChild(pPr, 'spacing') as Record<string, unknown> | undefined
   if (spacing) {
-    const before = xmlAttr(spacing, 'w:before') ?? xmlAttr(spacing, 'before')
-    const after = xmlAttr(spacing, 'w:after') ?? xmlAttr(spacing, 'after')
-    const line = xmlAttr(spacing, 'w:line') ?? xmlAttr(spacing, 'line')
-    const lineRule = xmlAttr(spacing, 'w:lineRule') ?? xmlAttr(spacing, 'lineRule')
+    const before = xmlAttrAlt(spacing, 'w:before', 'before')
+    const after = xmlAttrAlt(spacing, 'w:after', 'after')
+    const line = xmlAttrAlt(spacing, 'w:line', 'line')
+    const lineRule = xmlAttrAlt(spacing, 'w:lineRule', 'lineRule')
     if (before) props.spacingBefore = Number(before)
     if (after) props.spacingAfter = Number(after)
     if (line) {
@@ -150,15 +147,15 @@ function parseParagraphProps(pPr: Record<string, unknown> | undefined): Paragrap
   if (numPr) {
     const ilvlNode = findChild(numPr, 'ilvl') as Record<string, unknown> | undefined
     const numIdNode = findChild(numPr, 'numId') as Record<string, unknown> | undefined
-    const ilvl = Number(xmlAttr(ilvlNode, 'w:val') ?? xmlAttr(ilvlNode, 'val') ?? '0')
-    const numId = xmlAttr(numIdNode, 'w:val') ?? xmlAttr(numIdNode, 'val')
+    const ilvl = Number(xmlAttrAltOr(ilvlNode, '0', 'w:val', 'val'))
+    const numId = xmlAttrAlt(numIdNode, 'w:val', 'val')
     if (numId) props.numPr = { numId, ilvl }
   }
   if (findChild(pPr, 'keepNext') !== undefined) props.keepNext = true
   if (findChild(pPr, 'keepLines') !== undefined) props.keepLines = true
   const widow = findChild(pPr, 'widowControl') as Record<string, unknown> | undefined
   if (widow) {
-    const val = xmlAttr(widow, 'w:val') ?? xmlAttr(widow, 'val')
+    const val = xmlAttrAlt(widow, 'w:val', 'val')
     props.widowControl = val !== '0' && val !== 'false'
   }
   if (findChild(pPr, 'pageBreakBefore') !== undefined) props.pageBreakBefore = true
@@ -181,7 +178,7 @@ function parseRun(rNode: Record<string, unknown>, doc?: Document, rels?: Map<str
       runs.push({ id: nextId('r'), props, content: { type: 'tab' } })
     } else if (name === 'br') {
       const br = value as Record<string, unknown>
-      const type = xmlAttr(br, 'w:type') ?? xmlAttr(br, 'type')
+      const type = xmlAttrAlt(br, 'w:type', 'type')
       const breakType = type === 'page' ? 'page' : type === 'column' ? 'column' : 'line'
       runs.push({ id: nextId('r'), props, content: { type: 'break', breakType } })
     } else if (name === 'drawing' && doc && rels) {
@@ -220,16 +217,15 @@ function parseDrawingImage(
     const target = rels.get(rid)
     if (!target) continue
     const path = target.startsWith('/') ? target.slice(1) : `word/${target.replace(/^\.\.\//, '')}`
-    const normalized = path.replace(/\\/g, '/')
-    // Prefer word/media/...
-    const mediaPath = normalized.includes('media/')
-      ? normalized.startsWith('word/')
-        ? normalized
-        : `word/${normalized.replace(/^word\//, '')}`
-      : `word/${normalized}`
-    const part = [...doc.package.preservedParts, ...Object.values(doc.media).map((m) => ({ path: m.path ?? '', bytes: m.bytes }))].find(
-      (p) => p.path === mediaPath || p.path.endsWith(mediaPath.split('/').pop() ?? ''),
-    )
+    let mediaPath = path.replace(/\\/g, '/')
+    if (!mediaPath.startsWith('word/')) mediaPath = `word/${mediaPath}`
+    const part = [
+      ...doc.package.preservedParts,
+      ...Object.values(doc.media).map((m) => ({ path: m.path!, bytes: m.bytes })),
+    ].find((p) => {
+      const leaf = mediaPath.split('/').pop()!
+      return p.path === mediaPath || p.path.endsWith(leaf)
+    })
     // EMUs: 914400 per inch; twips: 1440 per inch → twips = emu * 1440 / 914400 = emu / 635
     const cx = Number(cxMatch?.[1] ?? '914400')
     const cy = Number(cyMatch?.[1] ?? '914400')
@@ -240,7 +236,7 @@ function parseDrawingImage(
     doc.media[mediaId] = {
       id: mediaId,
       contentType: 'image/png',
-      bytes: part?.bytes ?? new Uint8Array(),
+      bytes: part ? part.bytes : new Uint8Array(),
       path: mediaPath,
     }
     return { type: 'image', mediaId, widthTwips, heightTwips }
@@ -293,9 +289,9 @@ function parseBordersColors(
   for (const edge of edges) {
     const edgeNode = findChild(bordersNode, edge) as Record<string, unknown> | undefined
     if (!edgeNode) continue
-    const val = xmlAttr(edgeNode, 'w:val') ?? xmlAttr(edgeNode, 'val')
+    const val = xmlAttrAlt(edgeNode, 'w:val', 'val')
     if (val === 'nil' || val === 'none') continue
-    const color = parseColor(xmlAttr(edgeNode, 'w:color') ?? xmlAttr(edgeNode, 'color'))
+    const color = parseColor(xmlAttrAlt(edgeNode, 'w:color', 'color'))
     out[edge] = color ?? '#000000'
   }
   return out
@@ -306,13 +302,13 @@ function parseTableProps(tblPr: Record<string, unknown> | undefined): Table['pro
   if (!tblPr) return props
   const tblW = findChild(tblPr, 'tblW') as Record<string, unknown> | undefined
   if (tblW) {
-    const type = xmlAttr(tblW, 'w:type') ?? xmlAttr(tblW, 'type')
-    const w = xmlAttr(tblW, 'w:w') ?? xmlAttr(tblW, 'w')
+    const type = xmlAttrAlt(tblW, 'w:type', 'type')
+    const w = xmlAttrAlt(tblW, 'w:w', 'w')
     if (w && type !== 'pct' && type !== 'auto') props.widthTwips = Number(w)
   }
   const jc = findChild(tblPr, 'jc') as Record<string, unknown> | undefined
   if (jc) {
-    const v = xmlAttr(jc, 'w:val') ?? xmlAttr(jc, 'val')
+    const v = xmlAttrAlt(jc, 'w:val', 'val')
     if (v === 'left' || v === 'center' || v === 'right') props.alignment = v
   }
   const tblBorders = findChild(tblPr, 'tblBorders') as Record<string, unknown> | undefined
@@ -320,7 +316,7 @@ function parseTableProps(tblPr: Record<string, unknown> | undefined): Table['pro
   if (Object.keys(borderColors).length) props.borders = borderColors
   const tblCellSpacing = findChild(tblPr, 'tblCellSpacing') as Record<string, unknown> | undefined
   if (tblCellSpacing) {
-    const w = xmlAttr(tblCellSpacing, 'w:w') ?? xmlAttr(tblCellSpacing, 'w')
+    const w = xmlAttrAlt(tblCellSpacing, 'w:w', 'w')
     if (w) props.cellSpacing = Number(w)
   }
   return props
@@ -332,10 +328,10 @@ function parseCellMargin(tcMar: Record<string, unknown> | undefined): TableCell[
   for (const edge of ['top', 'right', 'bottom', 'left'] as const) {
     const node = findChild(tcMar, edge) as Record<string, unknown> | undefined
     if (!node) continue
-    const w = xmlAttr(node, 'w:w') ?? xmlAttr(node, 'w')
+    const w = xmlAttrAlt(node, 'w:w', 'w')
     if (w !== undefined) margin[edge] = Number(w)
   }
-  return Object.keys(margin).length ? margin : undefined
+  return Object.keys(margin).length > 0 ? margin : undefined
 }
 
 function parseTable(tblNode: Record<string, unknown>, doc: Document, rels: Map<string, string>): Table {
@@ -343,7 +339,7 @@ function parseTable(tblNode: Record<string, unknown>, doc: Document, rels: Map<s
   const tblGrid = findChild(tblNode, 'tblGrid') as Record<string, unknown> | undefined
   if (tblGrid) {
     for (const g of findChildren(tblGrid, 'gridCol')) {
-      const w = xmlAttr(g as Record<string, unknown>, 'w:w') ?? xmlAttr(g as Record<string, unknown>, 'w')
+      const w = xmlAttrAlt(g as Record<string, unknown>, 'w:w', 'w')
       if (w) gridCols.push(Number(w))
     }
   }
@@ -364,7 +360,7 @@ function parseTable(tblNode: Record<string, unknown>, doc: Document, rels: Map<s
       const tcMarNode = tcPr ? (findChild(tcPr, 'tcMar') as Record<string, unknown> | undefined) : undefined
       const tcBordersNode = tcPr ? (findChild(tcPr, 'tcBorders') as Record<string, unknown> | undefined) : undefined
       const shd = tcPr ? (findChild(tcPr, 'shd') as Record<string, unknown> | undefined) : undefined
-      const fill = shd ? xmlAttr(shd, 'w:fill') ?? xmlAttr(shd, 'fill') : undefined
+      const fill = shd ? xmlAttrAlt(shd, 'w:fill', 'fill') : undefined
       const blocks: Paragraph[] = []
       for (const [k, v] of Object.entries(tc)) {
         if (local(k) === 'p') {
@@ -384,20 +380,20 @@ function parseTable(tblNode: Record<string, unknown>, doc: Document, rels: Map<s
         props: {},
         blocks,
       }
-      const span = xmlAttr(gridSpanNode, 'w:val') ?? xmlAttr(gridSpanNode, 'val')
+      const span = xmlAttrAlt(gridSpanNode, 'w:val', 'val')
       if (span) cell.props.gridSpan = Number(span)
       if (vMergeNode) {
-        const vm = xmlAttr(vMergeNode, 'w:val') ?? xmlAttr(vMergeNode, 'val')
+        const vm = xmlAttrAlt(vMergeNode, 'w:val', 'val')
         cell.props.vMerge = vm === 'continue' ? 'continue' : 'restart'
       }
       if (vAlignNode) {
-        const va = xmlAttr(vAlignNode, 'w:val') ?? xmlAttr(vAlignNode, 'val')
+        const va = xmlAttrAlt(vAlignNode, 'w:val', 'val')
         if (va === 'center' || va === 'bottom') cell.props.vAlign = va
         else if (va === 'top') cell.props.vAlign = 'top'
       }
       if (tcWNode) {
-        const type = xmlAttr(tcWNode, 'w:type') ?? xmlAttr(tcWNode, 'type')
-        const w = xmlAttr(tcWNode, 'w:w') ?? xmlAttr(tcWNode, 'w')
+        const type = xmlAttrAlt(tcWNode, 'w:type', 'type')
+        const w = xmlAttrAlt(tcWNode, 'w:w', 'w')
         if (w && type !== 'pct' && type !== 'auto') cell.props.widthTwips = Number(w)
       }
       const margin = parseCellMargin(tcMarNode)
@@ -412,7 +408,7 @@ function parseTable(tblNode: Record<string, unknown>, doc: Document, rels: Map<s
     if (trPr) {
       const trHeight = findChild(trPr, 'trHeight') as Record<string, unknown> | undefined
       if (trHeight) {
-        const h = xmlAttr(trHeight, 'w:val') ?? xmlAttr(trHeight, 'val')
+        const h = xmlAttrAlt(trHeight, 'w:val', 'val')
         if (h) row.props.heightTwips = Number(h)
       }
     }
@@ -439,8 +435,8 @@ function parseSectPr(sectPr: Record<string, unknown> | undefined): SectionProper
 
   const pgSz = findChild(sectPr, 'pgSz') as Record<string, unknown> | undefined
   if (pgSz) {
-    const w = xmlAttr(pgSz, 'w:w') ?? xmlAttr(pgSz, 'w')
-    const h = xmlAttr(pgSz, 'w:h') ?? xmlAttr(pgSz, 'h')
+    const w = xmlAttrAlt(pgSz, 'w:w', 'w')
+    const h = xmlAttrAlt(pgSz, 'w:h', 'h')
     if (w) properties.pageSize.width = Number(w)
     if (h) properties.pageSize.height = Number(h)
   }
@@ -448,7 +444,7 @@ function parseSectPr(sectPr: Record<string, unknown> | undefined): SectionProper
   const pgMar = findChild(sectPr, 'pgMar') as Record<string, unknown> | undefined
   if (pgMar) {
     const read = (name: string): number | undefined => {
-      const v = xmlAttr(pgMar, `w:${name}`) ?? xmlAttr(pgMar, name)
+      const v = xmlAttrAlt(pgMar, `w:${name}`, name)
       return v !== undefined ? Number(v) : undefined
     }
     const top = read('top')
@@ -469,7 +465,7 @@ function parseSectPr(sectPr: Record<string, unknown> | undefined): SectionProper
 
   const cols = findChild(sectPr, 'cols') as Record<string, unknown> | undefined
   if (cols) {
-    const num = xmlAttr(cols, 'w:num') ?? xmlAttr(cols, 'num')
+    const num = xmlAttrAlt(cols, 'w:num', 'num')
     if (num) properties.columns = Number(num)
   }
 
@@ -485,8 +481,8 @@ function parseRelationships(relsXml: string | undefined): Map<string, string> {
     if (local(k) !== 'Relationship') continue
     for (const rel of asArray(v as never)) {
       const r = rel as Record<string, unknown>
-      const id = xmlAttr(r, 'Id') ?? xmlAttr(r, 'id')
-      const target = xmlAttr(r, 'Target') ?? xmlAttr(r, 'target')
+      const id = xmlAttrAlt(r, 'Id', 'id')
+      const target = xmlAttrAlt(r, 'Target', 'target')
       if (id && target) map.set(id, target)
     }
   }
@@ -532,33 +528,35 @@ function parseStyles(stylesXml: string | undefined, doc: Document): void {
 
   for (const styleNode of findChildren(stylesRoot, 'style')) {
     const s = styleNode as Record<string, unknown>
-    const type = xmlAttr(s, 'w:type') ?? xmlAttr(s, 'type')
-    const styleId = xmlAttr(s, 'w:styleId') ?? xmlAttr(s, 'styleId')
+    const type = xmlAttrAlt(s, 'w:type', 'type')
+    const styleId = xmlAttrAlt(s, 'w:styleId', 'styleId')
     if (!styleId) continue
     const nameNode = findChild(s, 'name') as Record<string, unknown> | undefined
-    const name = (nameNode && (xmlAttr(nameNode, 'w:val') ?? xmlAttr(nameNode, 'val'))) || styleId
+    const name = (nameNode && (xmlAttrAlt(nameNode, 'w:val', 'val'))) || styleId
     const basedOnNode = findChild(s, 'basedOn') as Record<string, unknown> | undefined
     const basedOn = basedOnNode
-      ? xmlAttr(basedOnNode, 'w:val') ?? xmlAttr(basedOnNode, 'val')
+      ? xmlAttrAlt(basedOnNode, 'w:val', 'val')
       : undefined
     const pPr = findChild(s, 'pPr') as Record<string, unknown> | undefined
     const rPr = findChild(s, 'rPr') as Record<string, unknown> | undefined
 
     if (type === 'paragraph' || type === undefined) {
-      doc.styles.paragraphStyles[styleId] = {
+      const style: (typeof doc.styles.paragraphStyles)[string] = {
         id: styleId,
         name,
-        ...(basedOn !== undefined ? { basedOn } : {}),
         paragraph: parseParagraphProps(pPr),
         character: parseRunProps(rPr),
       }
+      if (basedOn !== undefined) style.basedOn = basedOn
+      doc.styles.paragraphStyles[styleId] = style
     } else if (type === 'character') {
-      doc.styles.characterStyles[styleId] = {
+      const style: (typeof doc.styles.characterStyles)[string] = {
         id: styleId,
         name,
-        ...(basedOn !== undefined ? { basedOn } : {}),
         props: parseRunProps(rPr),
       }
+      if (basedOn !== undefined) style.basedOn = basedOn
+      doc.styles.characterStyles[styleId] = style
     }
   }
 }
@@ -617,7 +615,8 @@ export function parseDocx(bytes: Uint8Array): Document {
   }
 
   const root = parseXml(documentXml) as Record<string, unknown>
-  const document = (findChild(root, 'document') ?? root) as Record<string, unknown>
+  const document = findChild(root, 'document') as Record<string, unknown> | undefined
+  assert(document, 'docx_missing', 'w:document is required')
   const body = findChild(document, 'body') as Record<string, unknown> | undefined
   assert(body, 'docx_missing', 'w:body is required')
 

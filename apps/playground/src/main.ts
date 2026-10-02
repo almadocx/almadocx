@@ -145,21 +145,23 @@ const editor: EditorHandle = mountEditor(editorHost, {
 
 const zoomLabel = document.querySelector('#zoom-label') as HTMLElement
 
-document.querySelector('#open')?.addEventListener('change', async (ev) => {
-  const input = ev.target as HTMLInputElement
-  const file = input.files?.[0]
-  if (!file) return
-  try {
-    const buf = new Uint8Array(await file.arrayBuffer())
-    const name = file.name.toLowerCase()
-    const format = name.endsWith('.odt') ? 'odt' : name.endsWith('.docx') ? 'docx' : undefined
-    editor.loadBytes(buf, format)
-    toast(`Opened ${file.name}`)
-  } catch (e) {
-    toast(e instanceof Error ? e.message : 'Failed to open file', 'error')
-  } finally {
-    input.value = ''
-  }
+document.querySelector('#open')?.addEventListener('change', (ev) => {
+  void (async () => {
+    const input = ev.target as HTMLInputElement
+    const file = input.files?.[0]
+    if (!file) return
+    try {
+      const buf = new Uint8Array(await file.arrayBuffer())
+      const name = file.name.toLowerCase()
+      const format = name.endsWith('.odt') ? 'odt' : name.endsWith('.docx') ? 'docx' : undefined
+      editor.loadBytes(buf, format)
+      toast(`Opened ${file.name}`)
+    } catch (e) {
+      toast(e instanceof Error ? e.message : 'Failed to open file', 'error')
+    } finally {
+      input.value = ''
+    }
+  })()
 })
 
 async function download(filename: string, bytes: Uint8Array) {

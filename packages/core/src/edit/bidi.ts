@@ -51,7 +51,7 @@ export function moveCaretByArrow(
   // Peek at character we're crossing
   if (key === 'ArrowLeft') {
     if (clamped <= 0) return 0
-    const ch = text[clamped - 1] ?? ''
+    const ch = text[clamped - 1]!
     const dir = charDirection(ch)
     if (dir === 'rtl' || (dir === 'neutral' && baseDir === 'rtl')) {
       // In RTL, Left moves forward in string (higher offset) — but user expectation
@@ -68,12 +68,12 @@ export function moveCaretByArrow(
 export function moveByWord(text: string, offset: number, direction: -1 | 1): number {
   let i = Math.max(0, Math.min(offset, text.length))
   if (direction < 0) {
-    while (i > 0 && /\s/.test(text[i - 1] ?? '')) i -= 1
-    while (i > 0 && !/\s/.test(text[i - 1] ?? '')) i -= 1
+    while (i > 0 && /\s/.test(text[i - 1]!)) i -= 1
+    while (i > 0 && !/\s/.test(text[i - 1]!)) i -= 1
     return i
   }
-  while (i < text.length && !/\s/.test(text[i] ?? '')) i += 1
-  while (i < text.length && /\s/.test(text[i] ?? '')) i += 1
+  while (i < text.length && !/\s/.test(text[i]!)) i += 1
+  while (i < text.length && /\s/.test(text[i]!)) i += 1
   return i
 }
 

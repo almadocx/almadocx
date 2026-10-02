@@ -46,8 +46,8 @@ export function readZip(bytes: Uint8Array): ZipEntries {
   const out: ZipEntries = new Map()
   let total = 0
   for (const name of names) {
-    const data = raw[name]
-    if (!data) continue
+    // unzipSync always yields a Uint8Array for each key from Object.keys
+    const data = raw[name]!
     if (name.endsWith('/')) continue
     const path = normalizePath(name)
     total += data.byteLength

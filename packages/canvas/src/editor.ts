@@ -1501,7 +1501,10 @@ export function mountEditor(host: HTMLElement, options: EditorOptions = {}): Edi
   host.addEventListener('focusin', () => {
     editorActive = true
   })
-  host.addEventListener('paste', onPaste)
+  const onPasteListener = (e: ClipboardEvent) => {
+    void onPaste(e)
+  }
+  host.addEventListener('paste', onPasteListener)
   host.addEventListener('copy', onCopy)
   host.addEventListener('cut', onCut)
   canvas.addEventListener('pointerdown', onPointerDown)
@@ -1560,7 +1563,7 @@ export function mountEditor(host: HTMLElement, options: EditorOptions = {}): Edi
       for (const url of objectUrls) URL.revokeObjectURL(url)
       input.el.removeEventListener('keydown', onKeyDown)
       document.removeEventListener('keydown', onDocKeyDown)
-      host.removeEventListener('paste', onPaste)
+      host.removeEventListener('paste', onPasteListener)
       host.removeEventListener('copy', onCopy)
       host.removeEventListener('cut', onCut)
       canvas.removeEventListener('pointerdown', onPointerDown)
