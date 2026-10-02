@@ -73,7 +73,7 @@ function captureDeleted(
   )
   const paragraph = getParagraph(doc, start)
   const text = paragraphPlainText(paragraph).slice(start.offset, end.offset)
-  const hitProps = paragraph.runs[0]?.props ?? {}
+  const hitProps = paragraph.runs[0]!.props
   return { text, props: { ...hitProps } }
 }
 

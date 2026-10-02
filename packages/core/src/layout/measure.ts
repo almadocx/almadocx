@@ -18,7 +18,7 @@ export function createApproximateMeasurer(avgCharWidthEm = 0.5): TextMeasurer {
       const size = sizeMatch ? Number(sizeMatch[1]) : 16
       let units = 0
       for (const ch of text) {
-        const code = ch.codePointAt(0) ?? 0
+        const code = ch.codePointAt(0)!
         units += code > 0xff ? 1 : avgCharWidthEm
       }
       return {

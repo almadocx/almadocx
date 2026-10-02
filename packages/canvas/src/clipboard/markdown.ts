@@ -66,7 +66,7 @@ export function markdownToFragment(text: string): PastedFragment | undefined {
       const level = h[1]!.length
       const p = createEmptyParagraph(`Heading${String(level)}`)
       const size = 24 - (level - 1) * 2
-      p.runs = parseInline(h[2] ?? '', { bold: true, fontSizePt: size })
+      p.runs = parseInline(h[2]!, { bold: true, fontSizePt: size })
       paragraphs.push(p)
       continue
     }
@@ -74,7 +74,7 @@ export function markdownToFragment(text: string): PastedFragment | undefined {
     if (ul) {
       const p = createEmptyParagraph()
       p.props = { numPr: { numId: '1', ilvl: 0 } }
-      p.runs = parseInline(ul[3] ?? '')
+      p.runs = parseInline(ul[3]!)
       paragraphs.push(p)
       continue
     }
@@ -82,7 +82,7 @@ export function markdownToFragment(text: string): PastedFragment | undefined {
     if (ol) {
       const p = createEmptyParagraph()
       p.props = { numPr: { numId: '2', ilvl: 0 } }
-      p.runs = parseInline(ol[3] ?? '')
+      p.runs = parseInline(ol[3]!)
       paragraphs.push(p)
       continue
     }
@@ -91,6 +91,5 @@ export function markdownToFragment(text: string): PastedFragment | undefined {
     paragraphs.push(p)
   }
 
-  if (paragraphs.length === 0) paragraphs.push(createEmptyParagraph())
   return { paragraphs }
 }

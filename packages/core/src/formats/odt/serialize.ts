@@ -93,7 +93,7 @@ function paragraphToOdt(
     styleName = existing
   }
   const inner = p.runs.map((r) => runToOdt(r, autoStyles, counter)).join('')
-  return `<text:p text:style-name="${esc(styleName ?? 'Standard')}">${inner}</text:p>`
+  return `<text:p text:style-name="${esc(styleName!)}">${inner}</text:p>`
 }
 
 function buildAutomaticStyles(

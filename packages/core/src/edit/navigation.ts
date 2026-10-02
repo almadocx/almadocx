@@ -9,21 +9,21 @@ import {
 } from '../model/position.js'
 import { moveByWord, paragraphBaseDirection } from './bidi.js'
 
-function withCell(pos: DocPosition, cell: CellPath | undefined): DocPosition {
-  if (!cell) {
-    const { cell: _c, ...rest } = pos
-    void _c
-    return rest
-  }
+function withCell(pos: DocPosition, cell: CellPath): DocPosition {
   return { ...pos, cell }
 }
 
-function firstCellInTable(doc: Document, sectionIndex: number, blockIndex: number): CellPath | undefined {
-  const block = doc.sections[sectionIndex]?.blocks[blockIndex]
-  if (!block || block.type !== 'table') return undefined
+function firstCellInTable(doc: Document, sectionIndex: number, blockIndex: number): CellPath {
+  const block = doc.sections[sectionIndex]!.blocks[blockIndex] as Extract<
+    Document['sections'][number]['blocks'][number],
+    { type: 'table' }
+  >
   for (let row = 0; row < block.rows.length; row++) {
-    for (let cell = 0; cell < (block.rows[row]?.cells.length ?? 0); cell++) {
-      if ((block.rows[row]!.cells[cell]?.blocks.length ?? 0) > 0) {
+    const cells = block.rows[row]?.cells
+    if (!cells) continue
+    for (let cell = 0; cell < cells.length; cell++) {
+      const cellBlocks = cells[cell]?.blocks
+      if (cellBlocks && cellBlocks.length > 0) {
         return { row, cell, para: 0 }
       }
     }
@@ -39,15 +39,14 @@ function adjacentCell(
   const block = doc.sections[pos.sectionIndex]?.blocks[pos.blockIndex]
   if (!block || block.type !== 'table' || !pos.cell) return undefined
   const { row, cell, para } = pos.cell
-  const tc = block.rows[row]?.cells[cell]
-  if (!tc) return undefined
+  const tc = block.rows[row]!.cells[cell]!
 
   if (direction === 1) {
     if (para + 1 < tc.blocks.length) {
       return withCell({ ...pos, offset: 0 }, { row, cell, para: para + 1 })
     }
     // next cell in row
-    if (cell + 1 < (block.rows[row]?.cells.length ?? 0)) {
+    if (cell + 1 < block.rows[row]!.cells.length) {
       return withCell({ ...pos, offset: 0 }, { row, cell: cell + 1, para: 0 })
     }
     if (row + 1 < block.rows.length) {
@@ -95,7 +94,6 @@ function adjacentCell(
     const prevBlock = doc.sections[pos.sectionIndex]?.blocks[prevBi]
     if (prevBlock?.type === 'table') {
       const cellPath = firstCellInTable(doc, pos.sectionIndex, prevBi)
-      if (!cellPath) return { sectionIndex: pos.sectionIndex, blockIndex: prevBi, offset: 0 }
       // last cell of previous table
       const table = prevBlock
       let last: CellPath = cellPath
@@ -127,9 +125,22 @@ export function moveLeft(doc: Document, pos: DocPosition, byWord = false): DocPo
   const adj = adjacentCell(doc, p, -1)
   if (adj) return adj
   if (p.blockIndex > 0) {
+    const prevBi = p.blockIndex - 1
+    const prevBlock = doc.sections[p.sectionIndex]?.blocks[prevBi]
+    if (prevBlock?.type === 'table') {
+      let last: CellPath = { row: 0, cell: 0, para: 0 }
+      for (let r = 0; r < prevBlock.rows.length; r++) {
+        for (let c = 0; c < prevBlock.rows[r]!.cells.length; c++) {
+          const n = prevBlock.rows[r]!.cells[c]!.blocks.length
+          if (n > 0) last = { row: r, cell: c, para: n - 1 }
+        }
+      }
+      const prev = withCell({ sectionIndex: p.sectionIndex, blockIndex: prevBi, offset: 0 }, last)
+      return { ...prev, offset: paragraphLength(getParagraph(doc, prev)) }
+    }
     const prevPos = clampPosition(doc, {
       sectionIndex: p.sectionIndex,
-      blockIndex: p.blockIndex - 1,
+      blockIndex: prevBi,
       offset: 0,
     })
     const prev = getParagraph(doc, prevPos)
@@ -223,7 +234,7 @@ export function moveTableCellTab(
   }
   const { row, cell } = p.cell
   if (direction === 1) {
-    if (cell + 1 < (block.rows[row]?.cells.length ?? 0)) {
+    if (cell + 1 < block.rows[row]!.cells.length) {
       return {
         position: withCell({ ...p, offset: 0 }, { row, cell: cell + 1, para: 0 }),
       }
@@ -268,8 +279,7 @@ export function moveTableCellVertical(
   if (!block || block.type !== 'table' || !p.cell) return p
 
   const { row, cell, para } = p.cell
-  const tc = block.rows[row]?.cells[cell]
-  if (!tc) return p
+  const tc = block.rows[row]!.cells[cell]!
 
   // Next/prev paragraph inside the same cell
   if (direction === 1 && para + 1 < tc.blocks.length) {

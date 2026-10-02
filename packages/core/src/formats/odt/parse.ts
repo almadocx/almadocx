@@ -12,7 +12,7 @@ import {
 } from '../../model/types.js'
 import { createTextRun } from '../../model/text.js'
 import { isMacroPath, readZip, zipText } from '../../io/zip.js'
-import { asArray, parseXml, xmlAttr, xmlText } from '../../io/xml.js'
+import { asArray, parseXml, xmlAttr, xmlAttrAlt, xmlText, xmlAttrAltOr } from '../../io/xml.js'
 import { parseOdfLengthToTwips } from '../../util/units.js'
 import { nextId } from '../../util/id.js'
 import { assert } from '../../util/assert.js'
@@ -38,25 +38,23 @@ function parseTextStyleProps(node: Record<string, unknown>): CharacterProps {
   const props: CharacterProps = {}
   const tp = findChild(node, 'text-properties') as Record<string, unknown> | undefined
   if (!tp) return props
-  const weight = xmlAttr(tp, 'fo:font-weight') ?? xmlAttr(tp, 'font-weight')
+  const weight = xmlAttrAlt(tp, 'fo:font-weight', 'font-weight')
   if (weight === 'bold' || weight === '700') props.bold = true
-  const style = xmlAttr(tp, 'fo:font-style') ?? xmlAttr(tp, 'font-style')
+  const style = xmlAttrAlt(tp, 'fo:font-style', 'font-style')
   if (style === 'italic') props.italic = true
   const underline = xmlAttr(tp, 'style:text-underline-style')
   if (underline && underline !== 'none') props.underline = true
   const lineThrough = xmlAttr(tp, 'style:text-line-through-style')
   if (lineThrough && lineThrough !== 'none') props.strike = true
-  const size = xmlAttr(tp, 'fo:font-size') ?? xmlAttr(tp, 'font-size')
+  const size = xmlAttrAlt(tp, 'fo:font-size', 'font-size')
   if (size) {
     const pt = Number.parseFloat(size)
     if (!Number.isNaN(pt)) props.fontSizePt = pt
   }
-  const color = xmlAttr(tp, 'fo:color') ?? xmlAttr(tp, 'color')
+  const color = xmlAttrAlt(tp, 'fo:color', 'color')
   if (color) props.color = color
   const font =
-    xmlAttr(tp, 'style:font-name') ??
-    xmlAttr(tp, 'fo:font-family') ??
-    xmlAttr(tp, 'font-family')
+    xmlAttrAlt(tp, 'style:font-name', 'fo:font-family', 'font-family')
   if (font) props.fontFamily = font.replace(/'/g, '')
   return props
 }
@@ -65,7 +63,7 @@ function parseParaStyleProps(node: Record<string, unknown>): ParagraphProps {
   const props: ParagraphProps = {}
   const pp = findChild(node, 'paragraph-properties') as Record<string, unknown> | undefined
   if (!pp) return props
-  const align = xmlAttr(pp, 'fo:text-align') ?? xmlAttr(pp, 'text-align')
+  const align = xmlAttrAlt(pp, 'fo:text-align', 'text-align')
   if (align === 'start' || align === 'left') props.alignment = 'left'
   if (align === 'end' || align === 'right') props.alignment = 'right'
   if (align === 'center') props.alignment = 'center'
@@ -104,8 +102,8 @@ function parseStyles(stylesXml: string | undefined): StyleMaps {
   for (const container of containers) {
     for (const styleNode of asArray(findChild(container, 'style') as never)) {
       const s = styleNode as Record<string, unknown>
-      const name = xmlAttr(s, 'style:name') ?? xmlAttr(s, 'name')
-      const family = xmlAttr(s, 'style:family') ?? xmlAttr(s, 'family')
+      const name = xmlAttrAlt(s, 'style:name', 'name')
+      const family = xmlAttrAlt(s, 'style:family', 'family')
       if (!name) continue
       if (family === 'paragraph') {
         maps.paragraph[name] = {
@@ -128,7 +126,7 @@ function parseInline(
   inherited: CharacterProps,
 ): Run[] {
   const runs: Run[] = []
-  const styleName = xmlAttr(node, 'text:style-name') ?? xmlAttr(node, 'style-name')
+  const styleName = xmlAttrAlt(node, 'text:style-name', 'style-name')
   const props: CharacterProps = {
     ...inherited,
     ...(styleName ? styleMaps.text[styleName] ?? {} : {}),
@@ -143,7 +141,7 @@ function parseInline(
       }
     } else if (name === 's') {
       const s = value as Record<string, unknown>
-      const c = Number(xmlAttr(s, 'text:c') ?? xmlAttr(s, 'c') ?? '1')
+      const c = Number(xmlAttrAltOr(s, '1', 'text:c', 'c'))
       runs.push(createTextRun(' '.repeat(c), props))
     } else if (name === 'tab') {
       runs.push({ id: nextId('r'), props, content: { type: 'tab' } })
@@ -155,11 +153,6 @@ function parseInline(
     }
   }
 
-  // Direct text node on paragraph/heading
-  if (typeof node['#text'] === 'string' && runs.length === 0) {
-    runs.push(createTextRun(String(node['#text']), props))
-  }
-
   return runs
 }
 
@@ -167,7 +160,7 @@ function parseParagraphNode(
   node: Record<string, unknown>,
   styleMaps: StyleMaps,
 ): Paragraph {
-  const styleName = xmlAttr(node, 'text:style-name') ?? xmlAttr(node, 'style-name')
+  const styleName = xmlAttrAlt(node, 'text:style-name', 'style-name')
   const props: ParagraphProps = {
     ...(styleName ? styleMaps.paragraph[styleName] ?? { styleId: styleName } : {}),
   }
@@ -185,8 +178,8 @@ function parseParagraphNode(
     } else if (name === 's') {
       for (const child of asArray(value as never)) {
         const s = child as Record<string, unknown>
-        const c = Number(xmlAttr(s, 'text:c') ?? '1')
-        runs.push(createTextRun(' '.repeat(Number.isFinite(c) ? c : 1), charInherited))
+        const c = Number(xmlAttrAltOr(s, '1', 'text:c'))
+        runs.push(createTextRun(' '.repeat(c), charInherited))
       }
     } else if (name === 'tab') {
       runs.push({ id: nextId('r'), props: charInherited, content: { type: 'tab' } })
@@ -221,7 +214,7 @@ function collectOdtBlocks(
     } else if (name === 'list') {
       for (const list of asArray(value as never)) {
         const listNode = list as Record<string, unknown>
-        const styleName = xmlAttr(listNode, 'text:style-name') ?? ''
+        const styleName = xmlAttrAltOr(listNode, '', 'text:style-name')
         const numbered = /num|number|outline/i.test(styleName)
         const numId = numbered ? '2' : '1'
         for (const item of asArray(findChild(listNode, 'list-item') as never)) {
@@ -257,7 +250,7 @@ function parseOdtTable(tableNode: Record<string, unknown>, styleMaps: StyleMaps)
       if (local(k) !== 'table-cell' && local(k) !== 'covered-table-cell') continue
       for (const cellNode of asArray(v as never)) {
         const cell = cellNode as Record<string, unknown>
-        const span = Number(xmlAttr(cell, 'table:number-columns-spanned') ?? '1')
+        const span = Number(xmlAttrAltOr(cell, '1', 'table:number-columns-spanned'))
         const blocks: Paragraph[] = []
         for (const [ck, cv] of Object.entries(cell)) {
           if (local(ck) === 'p') {
@@ -307,8 +300,8 @@ export function parseOdt(bytes: Uint8Array): Document {
   if (autoStyles) {
     for (const styleNode of asArray(findChild(autoStyles, 'style') as never)) {
       const s = styleNode as Record<string, unknown>
-      const name = xmlAttr(s, 'style:name') ?? xmlAttr(s, 'name')
-      const family = xmlAttr(s, 'style:family') ?? xmlAttr(s, 'family')
+      const name = xmlAttrAlt(s, 'style:name', 'name')
+      const family = xmlAttrAlt(s, 'style:family', 'family')
       if (!name) continue
       if (family === 'paragraph') {
         styleMaps.paragraph[name] = { ...parseParaStyleProps(s), styleId: name }

@@ -11,7 +11,7 @@ export function nextTabStopTwips(
   currentXTwips: number,
   tabs: TabStop[] | undefined,
   contentWidthTwips: number,
-): { position: number; leader: TabStop['leader'] } {
+): { position: number; leader: NonNullable<TabStop['leader']> } {
   const stops = [...(tabs ?? [])].sort((a, b) => a.position - b.position)
   for (const stop of stops) {
     if (stop.position > currentXTwips + 1) {

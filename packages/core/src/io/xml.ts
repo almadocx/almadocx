@@ -53,6 +53,27 @@ export function xmlAttr(node: Record<string, unknown> | undefined, name: string)
   return typeof v === 'string' || typeof v === 'number' ? String(v) : undefined
 }
 
+/** Try attribute names in order (e.g. `w:val` then unprefixed `val`). */
+export function xmlAttrAlt(
+  node: Record<string, unknown> | undefined,
+  ...names: string[]
+): string | undefined {
+  for (const name of names) {
+    const v = xmlAttr(node, name)
+    if (v !== undefined) return v
+  }
+  return undefined
+}
+
+/** Like {@link xmlAttrAlt} but returns `fallback` when none match. */
+export function xmlAttrAltOr(
+  node: Record<string, unknown> | undefined,
+  fallback: string,
+  ...names: string[]
+): string {
+  return xmlAttrAlt(node, ...names) ?? fallback
+}
+
 export function xmlText(node: unknown): string {
   if (node === undefined || node === null) return ''
   if (typeof node === 'string' || typeof node === 'number') return String(node)
