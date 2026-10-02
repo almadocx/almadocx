@@ -1,0 +1,32 @@
+{
+  "name": "@almadocx/canvas",
+  "version": "0.1.0",
+  "description": "Almadocx canvas renderer, input, selection, and accessibility mirror",
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "development": "./src/index.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "eslint src"
+  },
+  "dependencies": {
+    "@almadocx/core": "workspace:*"
+  },
+  "devDependencies": {
+    "jsdom": "^30.1.1",
+    "vitest": "^3.2.4"
+  }
+}
