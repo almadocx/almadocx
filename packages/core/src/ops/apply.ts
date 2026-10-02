@@ -15,7 +15,14 @@ import {
   insertTextInParagraph,
   setMarkInParagraph,
 } from '../model/text.js'
-import type { CharacterProps, Document, Paragraph } from '../model/types.js'
+import type {
+  CharacterProps,
+  Document,
+  Paragraph,
+  Table,
+  TableCell,
+  TableRow,
+} from '../model/types.js'
 import { assert } from '../util/assert.js'
 import { nextId } from '../util/id.js'
 import type { AppliedOp, EditorOp } from './types.js'
@@ -68,6 +75,51 @@ function captureDeleted(
   const text = paragraphPlainText(paragraph).slice(start.offset, end.offset)
   const hitProps = paragraph.runs[0]?.props ?? {}
   return { text, props: { ...hitProps } }
+}
+
+function getTable(doc: Document, sectionIndex: number, blockIndex: number): Table {
+  const section = doc.sections[sectionIndex]
+  assert(section, 'bad_position', 'section missing')
+  const block = section.blocks[blockIndex]
+  assert(block?.type === 'table', 'bad_position', 'expected table')
+  return block
+}
+
+function replaceTable(
+  doc: Document,
+  sectionIndex: number,
+  blockIndex: number,
+  table: Table,
+): Document {
+  return {
+    ...doc,
+    sections: doc.sections.map((sec, i) =>
+      i === sectionIndex
+        ? { ...sec, blocks: sec.blocks.map((b, bi) => (bi === blockIndex ? table : b)) }
+        : sec,
+    ),
+  }
+}
+
+/** Build an empty cell that mirrors the gridSpan/width of a template cell when given. */
+function buildEmptyCell(template?: TableCell): TableCell {
+  const props: TableCell['props'] = {}
+  if (template?.props.gridSpan !== undefined) props.gridSpan = template.props.gridSpan
+  if (template?.props.widthTwips !== undefined) props.widthTwips = template.props.widthTwips
+  return {
+    id: nextId('tc'),
+    props,
+    blocks: [createEmptyParagraph()],
+  }
+}
+
+/** Build an empty row mirroring the gridSpan structure of a template row. */
+function buildEmptyRow(template: TableRow): TableRow {
+  return {
+    id: nextId('tr'),
+    props: {},
+    cells: template.cells.map((c) => buildEmptyCell(c)),
+  }
 }
 
 export function applyOp(doc: Document, op: EditorOp): { doc: Document; applied: AppliedOp } {
@@ -565,6 +617,139 @@ export function applyOp(doc: Document, op: EditorOp): { doc: Document; applied: 
             type: 'deleteRange',
             range: { anchor: position, focus: end },
             deletedText: '\t',
+          },
+        },
+      }
+    }
+    case 'insertRow': {
+      const table = getTable(doc, op.sectionIndex, op.blockIndex)
+      assert(table.rows.length > 0, 'bad_position', 'table has no rows')
+      const insertAt = Math.max(0, Math.min(op.afterRow + 1, table.rows.length))
+      // Template row for gridSpan structure: prefer the row at afterRow, else the next row.
+      const templateIndex =
+        op.afterRow >= 0 ? Math.min(op.afterRow, table.rows.length - 1) : 0
+      const template = table.rows[templateIndex]!
+      const newRow = op.row ?? buildEmptyRow(template)
+      const rows = [
+        ...table.rows.slice(0, insertAt),
+        newRow,
+        ...table.rows.slice(insertAt),
+      ]
+      const newDoc = replaceTable(doc, op.sectionIndex, op.blockIndex, { ...table, rows })
+      return {
+        doc: newDoc,
+        applied: {
+          forward: { ...op },
+          inverse: {
+            type: 'deleteRow',
+            sectionIndex: op.sectionIndex,
+            blockIndex: op.blockIndex,
+            row: insertAt,
+          },
+        },
+      }
+    }
+    case 'deleteRow': {
+      const table = getTable(doc, op.sectionIndex, op.blockIndex)
+      assert(table.rows.length > 1, 'unsupported', 'cannot delete the only row in a table')
+      assert(
+        op.row >= 0 && op.row < table.rows.length,
+        'bad_position',
+        `table row ${String(op.row)} missing`,
+      )
+      const deletedRow = table.rows[op.row]!
+      const rows = [...table.rows.slice(0, op.row), ...table.rows.slice(op.row + 1)]
+      const newDoc = replaceTable(doc, op.sectionIndex, op.blockIndex, { ...table, rows })
+      return {
+        doc: newDoc,
+        applied: {
+          forward: { ...op, deletedRow },
+          inverse: {
+            type: 'insertRow',
+            sectionIndex: op.sectionIndex,
+            blockIndex: op.blockIndex,
+            afterRow: op.row - 1,
+            row: deletedRow,
+          },
+        },
+      }
+    }
+    case 'insertColumn': {
+      const table = getTable(doc, op.sectionIndex, op.blockIndex)
+      assert(table.rows.length > 0, 'bad_position', 'table has no rows')
+      const insertAt = Math.max(0, op.afterCol + 1)
+      const rows = table.rows.map((r, ri) => {
+        const cellAt = Math.min(insertAt, r.cells.length)
+        const newCell = op.cells?.[ri] ?? buildEmptyCell(r.cells[Math.min(op.afterCol, r.cells.length - 1)])
+        return {
+          ...r,
+          cells: [...r.cells.slice(0, cellAt), newCell, ...r.cells.slice(cellAt)],
+        }
+      })
+      let gridCols = table.gridCols
+      if (gridCols) {
+        const width =
+          op.gridCol ??
+          (gridCols.length > 0
+            ? Math.round(gridCols.reduce((a, b) => a + b, 0) / gridCols.length)
+            : 2400)
+        const gridAt = Math.max(0, Math.min(insertAt, gridCols.length))
+        gridCols = [...gridCols.slice(0, gridAt), width, ...gridCols.slice(gridAt)]
+      }
+      const newTable: Table = { ...table, rows }
+      if (gridCols) newTable.gridCols = gridCols
+      const newDoc = replaceTable(doc, op.sectionIndex, op.blockIndex, newTable)
+      return {
+        doc: newDoc,
+        applied: {
+          forward: { ...op },
+          inverse: {
+            type: 'deleteColumn',
+            sectionIndex: op.sectionIndex,
+            blockIndex: op.blockIndex,
+            col: insertAt,
+          },
+        },
+      }
+    }
+    case 'deleteColumn': {
+      const table = getTable(doc, op.sectionIndex, op.blockIndex)
+      const colCount = table.rows[0]?.cells.length ?? 0
+      assert(colCount > 1, 'unsupported', 'cannot delete the only column in a table')
+      assert(
+        op.col >= 0 && op.col < colCount,
+        'bad_position',
+        `table column ${String(op.col)} missing`,
+      )
+      const deletedCells: TableCell[] = []
+      const rows = table.rows.map((r) => {
+        const removed = r.cells[op.col]
+        if (removed) deletedCells.push(removed)
+        return {
+          ...r,
+          cells: [...r.cells.slice(0, op.col), ...r.cells.slice(op.col + 1)],
+        }
+      })
+      let gridCols = table.gridCols
+      let deletedGridCol: number | undefined
+      if (gridCols && op.col < gridCols.length) {
+        deletedGridCol = gridCols[op.col]
+        gridCols = [...gridCols.slice(0, op.col), ...gridCols.slice(op.col + 1)]
+      }
+      const newTable: Table = { ...table, rows }
+      if (gridCols) newTable.gridCols = gridCols
+      const newDoc = replaceTable(doc, op.sectionIndex, op.blockIndex, newTable)
+      return {
+        doc: newDoc,
+        applied: {
+          forward: { ...op, deletedCells, ...(deletedGridCol !== undefined ? { deletedGridCol } : {}) },
+          inverse: {
+            type: 'insertColumn',
+            sectionIndex: op.sectionIndex,
+            blockIndex: op.blockIndex,
+            afterCol: op.col - 1,
+            cells: deletedCells,
+            ...(deletedGridCol !== undefined ? { gridCol: deletedGridCol } : {}),
           },
         },
       }

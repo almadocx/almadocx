@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest'
-import { applyOp, createEmptyDocument, layoutDocument, patchLayoutParagraph, type Table } from '../src/index.js'
+import {
+  applyOp,
+  createEmptyDocument,
+  layoutDocument,
+  patchLayoutCellParagraph,
+  patchLayoutParagraph,
+  type Table,
+} from '../src/index.js'
 
 describe('layout', () => {
   it('produces at least one page with lines', () => {
@@ -58,6 +65,96 @@ describe('layout', () => {
     expect(laid.cells[0]!.width).toBeGreaterThan(10)
     expect(laid.cells[1]!.width).toBeGreaterThan(10)
     expect(laid.cells[2]!.width).toBeGreaterThan(10)
+  })
+
+  it('expands a vMerge restart cell to span continued rows', () => {
+    const doc = createEmptyDocument()
+    const makeCell = (id: string, text: string, vMerge?: 'restart' | 'continue') => ({
+      id,
+      props: vMerge ? { vMerge } : {},
+      blocks: [
+        {
+          id: `${id}p`,
+          type: 'paragraph' as const,
+          props: {},
+          runs: [{ id: `${id}r`, props: {}, content: { type: 'text' as const, text } }],
+        },
+      ],
+    })
+    const table: Table = {
+      id: 'tm',
+      type: 'table',
+      props: {},
+      gridCols: [2000, 2000],
+      rows: [
+        {
+          id: 'row0',
+          props: {},
+          cells: [makeCell('a', 'merged', 'restart'), makeCell('b', 'top-right')],
+        },
+        {
+          id: 'row1',
+          props: {},
+          cells: [makeCell('a2', '', 'continue'), makeCell('c', 'bottom-right')],
+        },
+      ],
+    }
+    doc.sections[0]!.blocks = [table]
+    const layout = layoutDocument(doc)
+    const laid = layout.pages[0]!.blocks.find((b) => b.kind === 'table')
+    expect(laid?.kind).toBe('table')
+    if (laid?.kind !== 'table') return
+    const restart = laid.cells.find((c) => c.rowIndex === 0 && c.cellIndex === 0)!
+    const topRight = laid.cells.find((c) => c.rowIndex === 0 && c.cellIndex === 1)!
+    const bottomRight = laid.cells.find((c) => c.rowIndex === 1 && c.cellIndex === 1)!
+    expect(restart).toBeTruthy()
+    // continue cells are not laid out as content boxes
+    expect(laid.cells.some((c) => c.rowIndex === 1 && c.cellIndex === 0)).toBe(false)
+    // restart cell spans both rows
+    expect(restart.height).toBeGreaterThan(topRight.height)
+    expect(restart.height).toBeCloseTo(topRight.height + bottomRight.height, 1)
+  })
+
+  it('patchLayoutCellParagraph updates a cell paragraph in place', () => {
+    const doc = createEmptyDocument()
+    const table: Table = {
+      id: 'tc',
+      type: 'table',
+      props: {},
+      gridCols: [3000, 3000],
+      rows: [
+        {
+          id: 'r0',
+          props: {},
+          cells: [0, 1].map((i) => ({
+            id: `cell${i}`,
+            props: {},
+            blocks: [
+              {
+                id: `cp${i}`,
+                type: 'paragraph' as const,
+                props: {},
+                runs: [{ id: `cr${i}`, props: {}, content: { type: 'text' as const, text: `Hi ${i}` } }],
+              },
+            ],
+          })),
+        },
+      ],
+    }
+    doc.sections[0]!.blocks = [table]
+    let layout = layoutDocument(doc)
+    // Type a character into cell (0,0) paragraph 0 and patch in place.
+    doc.sections[0]!.blocks = [doc.sections[0]!.blocks[0]!]
+    const cellPara = (doc.sections[0]!.blocks[0] as Table).rows[0]!.cells[0]!.blocks[0]!
+    cellPara.runs[0]!.content = { type: 'text', text: 'Hi 0 extra' }
+    const patched = patchLayoutCellParagraph(doc, layout, 0, 0, { row: 0, cell: 0, para: 0 })
+    layout = patched.layout
+    const laid = layout.pages[0]!.blocks.find((b) => b.kind === 'table')
+    expect(laid?.kind).toBe('table')
+    if (laid?.kind !== 'table') return
+    const cell = laid.cells.find((c) => c.rowIndex === 0 && c.cellIndex === 0)!
+    const text = cell.paragraphs[0]!.lines.flatMap((l) => l.runs.map((r) => r.text)).join('')
+    expect(text).toContain('extra')
   })
 
   it('patchLayoutParagraph keeps list indent stable across keystrokes', () => {

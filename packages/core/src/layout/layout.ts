@@ -765,25 +765,51 @@ function layoutTableBlock(
   const borderColor = table.props.borders?.insideH ?? table.props.borders?.top ?? '#c8c2b8'
   let lastRow = startRow - 1
 
+  const DEFAULT_PAD = 4
+  const padPx = (twips: number | undefined): number =>
+    twips !== undefined ? twipsToPx(twips, ctx.dpi) : DEFAULT_PAD
+
+  interface CellMeta {
+    cell: LayoutTableCell
+    col: number
+    span: number
+    vAlign?: 'top' | 'center' | 'bottom'
+    marginTop: number
+    marginBottom: number
+    contentHeight: number
+    isRestart: boolean
+  }
+  // Row-offset-indexed bookkeeping for vertical-merge expansion.
+  const rowHeights: number[] = []
+  const rowContinueCols: Set<number>[] = []
+  const allMeta: CellMeta[] = []
+
   for (let rowIndex = startRow; rowIndex < table.rows.length; rowIndex++) {
     const row = table.rows[rowIndex]!
     let col = 0
     let rowHeight = 0
-    const rowCells: LayoutTableCell[] = []
+    const continueCols = new Set<number>()
+    const rowMeta: CellMeta[] = []
     for (let cellIndex = 0; cellIndex < row.cells.length; cellIndex++) {
       const cell = row.cells[cellIndex]!
+      const span = cell.props.gridSpan ?? 1
       if (cell.props.vMerge === 'continue') {
-        col += cell.props.gridSpan ?? 1
+        continueCols.add(col)
+        col += span
         continue
       }
-      const span = cell.props.gridSpan ?? 1
       let cellX = x
       for (let i = 0; i < col; i++) cellX += colWidths[i] ?? 0
       let cellW = 0
       for (let i = col; i < col + span; i++) cellW += colWidths[i] ?? 0
 
+      const marginTop = padPx(cell.props.margin?.top)
+      const marginBottom = padPx(cell.props.margin?.bottom)
+      const marginLeft = padPx(cell.props.margin?.left)
+      const marginRight = padPx(cell.props.margin?.right)
+
       const paras: LayoutParagraph[] = []
-      let cy = rowY + 4
+      let cy = rowY + marginTop
       for (let pi = 0; pi < cell.blocks.length; pi++) {
         const p = cell.blocks[pi]!
         if (p.type !== 'paragraph') continue
@@ -792,9 +818,9 @@ function layoutTableBlock(
           p,
           sectionIndex,
           blockIndex,
-          cellX + 4,
+          cellX + marginLeft,
           cy,
-          Math.max(8, cellW - 8),
+          Math.max(8, cellW - marginLeft - marginRight),
           ctx,
           undefined,
           { row: rowIndex, cell: cellIndex, para: pi },
@@ -802,7 +828,12 @@ function layoutTableBlock(
         paras.push(laid)
         cy = laid.y + laid.height
       }
-      const cellH = Math.max(cy - rowY + 4, twipsToPx(row.props.heightTwips ?? 0, ctx.dpi), 24)
+      const contentHeight = cy - (rowY + marginTop)
+      const cellH = Math.max(
+        contentHeight + marginTop + marginBottom,
+        twipsToPx(row.props.heightTwips ?? 0, ctx.dpi),
+        24,
+      )
       rowHeight = Math.max(rowHeight, cellH)
       const laidCell: LayoutTableCell = {
         x: cellX,
@@ -815,13 +846,50 @@ function layoutTableBlock(
         cellIndex,
       }
       if (cell.props.shading) laidCell.shading = cell.props.shading
-      rowCells.push(laidCell)
+      const meta: CellMeta = {
+        cell: laidCell,
+        col,
+        span,
+        marginTop,
+        marginBottom,
+        contentHeight,
+        isRestart: cell.props.vMerge === 'restart',
+        ...(cell.props.vAlign ? { vAlign: cell.props.vAlign } : {}),
+      }
+      rowMeta.push(meta)
+      allMeta.push(meta)
       col += span
     }
-    for (const c of rowCells) c.height = rowHeight
-    cells.push(...rowCells)
+    for (const m of rowMeta) m.cell.height = rowHeight
+    cells.push(...rowMeta.map((m) => m.cell))
+    rowHeights.push(rowHeight)
+    rowContinueCols.push(continueCols)
     rowY += rowHeight
     lastRow = rowIndex
+  }
+
+  // Vertical merge: expand restart cells to cover subsequent `continue` rows in
+  // the same starting column. Continue cells are not laid out, so their row
+  // heights are added onto the originating restart cell's box.
+  for (const m of allMeta) {
+    if (!m.isRestart) continue
+    const startOffset = m.cell.rowIndex - startRow
+    for (let r = startOffset + 1; r < rowHeights.length; r++) {
+      if (!rowContinueCols[r]!.has(m.col)) break
+      m.cell.height += rowHeights[r]!
+    }
+  }
+
+  // Vertical alignment: offset cell paragraphs within the (possibly merged) box.
+  for (const m of allMeta) {
+    if (!m.vAlign || m.vAlign === 'top') continue
+    const avail = m.cell.height - m.marginTop - m.marginBottom
+    const slack = avail - m.contentHeight
+    if (slack <= 0.5) continue
+    const dy = m.vAlign === 'center' ? slack / 2 : slack
+    for (let i = 0; i < m.cell.paragraphs.length; i++) {
+      m.cell.paragraphs[i] = shiftParagraphY(m.cell.paragraphs[i]!, m.cell.paragraphs[i]!.y + dy)
+    }
   }
 
   return {
@@ -958,6 +1026,120 @@ export function patchLayoutParagraph(
   return {
     layout: { pages },
     needsFullLayout: overflows || underflows || Math.abs(dy) > 0.5,
+  }
+}
+
+/**
+ * Fast path for typing inside a table cell: re-measure a single cell paragraph
+ * in place. Follows the same philosophy as {@link patchLayoutParagraph} — paint
+ * immediately, and request a full reflow when the paragraph height changes (which
+ * can grow the row / shift the rest of the table and pagination).
+ */
+export function patchLayoutCellParagraph(
+  doc: Document,
+  layout: LayoutResult,
+  sectionIndex: number,
+  blockIndex: number,
+  cellPath: { row: number; cell: number; para: number },
+  options: LayoutOptions = {},
+): PatchLayoutResult {
+  const dpi = options.dpi ?? 96
+  const measurer = options.measurer ?? createApproximateMeasurer()
+  const ctx: Ctx = { measurer, dpi }
+
+  const section = doc.sections[sectionIndex]
+  const block = section?.blocks[blockIndex]
+  if (!block || block.type !== 'table') {
+    return { layout, needsFullLayout: true }
+  }
+  const modelPara = block.rows[cellPath.row]?.cells[cellPath.cell]?.blocks[cellPath.para]
+  if (!modelPara || modelPara.type !== 'paragraph') {
+    return { layout, needsFullLayout: true }
+  }
+
+  // Locate the single laid-out table + cell paragraph. Bail if the table is
+  // split across pages / rows in a way that makes the target ambiguous.
+  let pageIndex = -1
+  let blockSlot = -1
+  let cellArrIndex = -1
+  let paraArrIndex = -1
+  let existing: LayoutParagraph | undefined
+  let occurrences = 0
+  for (let pi = 0; pi < layout.pages.length; pi++) {
+    const page = layout.pages[pi]!
+    for (let bi = 0; bi < page.blocks.length; bi++) {
+      const b = page.blocks[bi]!
+      if (b.kind !== 'table' || b.sectionIndex !== sectionIndex || b.blockIndex !== blockIndex) continue
+      for (let ci = 0; ci < b.cells.length; ci++) {
+        const c = b.cells[ci]!
+        if (c.rowIndex !== cellPath.row || c.cellIndex !== cellPath.cell) continue
+        for (let pj = 0; pj < c.paragraphs.length; pj++) {
+          const p = c.paragraphs[pj]!
+          if (p.cell && p.cell.para === cellPath.para) {
+            occurrences += 1
+            pageIndex = pi
+            blockSlot = bi
+            cellArrIndex = ci
+            paraArrIndex = pj
+            existing = p
+          }
+        }
+      }
+    }
+  }
+  if (!existing || occurrences !== 1) {
+    return { layout, needsFullLayout: true }
+  }
+
+  const pProps = resolveParagraphProps(doc, modelPara)
+  const spacingBefore = twipsToPx(pProps.spacingBefore ?? 0, dpi)
+  const indentLeft = twipsToPx(pProps.indentLeft ?? 0, dpi)
+  const indentRight = twipsToPx(pProps.indentRight ?? 0, dpi)
+  const contentX = existing.x - indentLeft
+  const contentWidth = existing.width + indentLeft + indentRight
+  const cursorY = existing.y - spacingBefore
+
+  const relaid = layoutParagraphBlock(
+    doc,
+    modelPara,
+    sectionIndex,
+    blockIndex,
+    contentX,
+    cursorY,
+    contentWidth,
+    ctx,
+    undefined,
+    { row: cellPath.row, cell: cellPath.cell, para: cellPath.para },
+  )
+
+  const dy = relaid.height - existing.height
+
+  const page = layout.pages[pageIndex]!
+  const table = page.blocks[blockSlot] as LayoutTable
+  const cell = table.cells[cellArrIndex]!
+  // Replace the target paragraph; shift later paragraphs in the same cell so the
+  // immediate paint stays coherent until the debounced full reflow lands.
+  const newParagraphs = cell.paragraphs.map((p, i) => {
+    if (i === paraArrIndex) return relaid
+    if (dy !== 0 && i > paraArrIndex) return shiftParagraphY(p, p.y + dy)
+    return p
+  })
+  const newCell: LayoutTableCell = { ...cell, paragraphs: newParagraphs }
+  const newCells = table.cells.map((c, i) => (i === cellArrIndex ? newCell : c))
+  const newTable: LayoutTable = { ...table, cells: newCells }
+  const newBlocks = page.blocks.map((b, i) => (i === blockSlot ? newTable : b))
+  const newPage: LayoutPage = {
+    ...page,
+    blocks: newBlocks,
+    paragraphs: newBlocks.filter((b): b is LayoutParagraph => b.kind === 'paragraph'),
+  }
+  const pages = layout.pages.map((p, i) => (i === pageIndex ? newPage : p))
+
+  return {
+    layout: { pages },
+    // Any height change can grow the row and shift subsequent rows / blocks and
+    // pagination, so defer to a full layout; a pure in-cell edit paints instantly.
+    needsFullLayout: Math.abs(dy) > 0.5,
   }
 }
 

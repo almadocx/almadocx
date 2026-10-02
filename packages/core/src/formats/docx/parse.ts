@@ -283,6 +283,61 @@ function parseParagraph(
   }
 }
 
+/** Parse a <w:tblBorders>/<w:tcBorders>-style node into edge color strings. */
+function parseBordersColors(
+  bordersNode: Record<string, unknown> | undefined,
+  edges: readonly string[],
+): Record<string, string> {
+  const out: Record<string, string> = {}
+  if (!bordersNode) return out
+  for (const edge of edges) {
+    const edgeNode = findChild(bordersNode, edge) as Record<string, unknown> | undefined
+    if (!edgeNode) continue
+    const val = xmlAttr(edgeNode, 'w:val') ?? xmlAttr(edgeNode, 'val')
+    if (val === 'nil' || val === 'none') continue
+    const color = parseColor(xmlAttr(edgeNode, 'w:color') ?? xmlAttr(edgeNode, 'color'))
+    out[edge] = color ?? '#000000'
+  }
+  return out
+}
+
+function parseTableProps(tblPr: Record<string, unknown> | undefined): Table['props'] {
+  const props: Table['props'] = {}
+  if (!tblPr) return props
+  const tblW = findChild(tblPr, 'tblW') as Record<string, unknown> | undefined
+  if (tblW) {
+    const type = xmlAttr(tblW, 'w:type') ?? xmlAttr(tblW, 'type')
+    const w = xmlAttr(tblW, 'w:w') ?? xmlAttr(tblW, 'w')
+    if (w && type !== 'pct' && type !== 'auto') props.widthTwips = Number(w)
+  }
+  const jc = findChild(tblPr, 'jc') as Record<string, unknown> | undefined
+  if (jc) {
+    const v = xmlAttr(jc, 'w:val') ?? xmlAttr(jc, 'val')
+    if (v === 'left' || v === 'center' || v === 'right') props.alignment = v
+  }
+  const tblBorders = findChild(tblPr, 'tblBorders') as Record<string, unknown> | undefined
+  const borderColors = parseBordersColors(tblBorders, ['top', 'bottom', 'left', 'right', 'insideH', 'insideV'])
+  if (Object.keys(borderColors).length) props.borders = borderColors
+  const tblCellSpacing = findChild(tblPr, 'tblCellSpacing') as Record<string, unknown> | undefined
+  if (tblCellSpacing) {
+    const w = xmlAttr(tblCellSpacing, 'w:w') ?? xmlAttr(tblCellSpacing, 'w')
+    if (w) props.cellSpacing = Number(w)
+  }
+  return props
+}
+
+function parseCellMargin(tcMar: Record<string, unknown> | undefined): TableCell['props']['margin'] {
+  if (!tcMar) return undefined
+  const margin: NonNullable<TableCell['props']['margin']> = {}
+  for (const edge of ['top', 'right', 'bottom', 'left'] as const) {
+    const node = findChild(tcMar, edge) as Record<string, unknown> | undefined
+    if (!node) continue
+    const w = xmlAttr(node, 'w:w') ?? xmlAttr(node, 'w')
+    if (w !== undefined) margin[edge] = Number(w)
+  }
+  return Object.keys(margin).length ? margin : undefined
+}
+
 function parseTable(tblNode: Record<string, unknown>, doc: Document, rels: Map<string, string>): Table {
   const gridCols: number[] = []
   const tblGrid = findChild(tblNode, 'tblGrid') as Record<string, unknown> | undefined
@@ -304,6 +359,10 @@ function parseTable(tblNode: Record<string, unknown>, doc: Document, rels: Map<s
         ? (findChild(tcPr, 'gridSpan') as Record<string, unknown> | undefined)
         : undefined
       const vMergeNode = tcPr ? (findChild(tcPr, 'vMerge') as Record<string, unknown> | undefined) : undefined
+      const vAlignNode = tcPr ? (findChild(tcPr, 'vAlign') as Record<string, unknown> | undefined) : undefined
+      const tcWNode = tcPr ? (findChild(tcPr, 'tcW') as Record<string, unknown> | undefined) : undefined
+      const tcMarNode = tcPr ? (findChild(tcPr, 'tcMar') as Record<string, unknown> | undefined) : undefined
+      const tcBordersNode = tcPr ? (findChild(tcPr, 'tcBorders') as Record<string, unknown> | undefined) : undefined
       const shd = tcPr ? (findChild(tcPr, 'shd') as Record<string, unknown> | undefined) : undefined
       const fill = shd ? xmlAttr(shd, 'w:fill') ?? xmlAttr(shd, 'fill') : undefined
       const blocks: Paragraph[] = []
@@ -331,17 +390,39 @@ function parseTable(tblNode: Record<string, unknown>, doc: Document, rels: Map<s
         const vm = xmlAttr(vMergeNode, 'w:val') ?? xmlAttr(vMergeNode, 'val')
         cell.props.vMerge = vm === 'continue' ? 'continue' : 'restart'
       }
+      if (vAlignNode) {
+        const va = xmlAttr(vAlignNode, 'w:val') ?? xmlAttr(vAlignNode, 'val')
+        if (va === 'center' || va === 'bottom') cell.props.vAlign = va
+        else if (va === 'top') cell.props.vAlign = 'top'
+      }
+      if (tcWNode) {
+        const type = xmlAttr(tcWNode, 'w:type') ?? xmlAttr(tcWNode, 'type')
+        const w = xmlAttr(tcWNode, 'w:w') ?? xmlAttr(tcWNode, 'w')
+        if (w && type !== 'pct' && type !== 'auto') cell.props.widthTwips = Number(w)
+      }
+      const margin = parseCellMargin(tcMarNode)
+      if (margin) cell.props.margin = margin
+      const cellBorders = parseBordersColors(tcBordersNode, ['top', 'bottom', 'left', 'right'])
+      if (Object.keys(cellBorders).length) cell.props.borders = cellBorders
       if (fill && fill !== 'auto') cell.props.shading = `#${fill}`
       cells.push(cell)
     }
     const row: TableRow = { id: nextId('tr'), props: {}, cells }
     if (trPr && findChild(trPr, 'tblHeader') !== undefined) row.props.header = true
+    if (trPr) {
+      const trHeight = findChild(trPr, 'trHeight') as Record<string, unknown> | undefined
+      if (trHeight) {
+        const h = xmlAttr(trHeight, 'w:val') ?? xmlAttr(trHeight, 'val')
+        if (h) row.props.heightTwips = Number(h)
+      }
+    }
     rows.push(row)
   }
+  const tblPr = findChild(tblNode, 'tblPr') as Record<string, unknown> | undefined
   const table: Table = {
     id: nextId('tbl'),
     type: 'table',
-    props: {},
+    props: parseTableProps(tblPr),
     rows,
   }
   if (gridCols.length) table.gridCols = gridCols

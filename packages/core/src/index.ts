@@ -106,6 +106,8 @@ export {
   moveHome,
   moveEnd,
   moveVertical,
+  moveTableCellTab,
+  moveTableCellVertical,
 } from './edit/navigation.js'
 
 export { nextTabStopTwips, defaultTabs } from './layout/tabs.js'
@@ -125,13 +127,14 @@ export type {
   LayoutPage,
   LayoutParagraph,
   LayoutTable,
+  LayoutTableCell,
   LayoutBlock,
   LayoutLine,
   LayoutGlyphRun,
   LayoutOptions,
   PatchLayoutResult,
 } from './layout/layout.js'
-export { layoutDocument, patchLayoutParagraph } from './layout/layout.js'
+export { layoutDocument, patchLayoutParagraph, patchLayoutCellParagraph } from './layout/layout.js'
 export {
   type TextMeasurer,
   type TextMetrics,

@@ -16,12 +16,14 @@ import {
   moveHome,
   moveLeft,
   moveRight,
+  moveTableCellTab,
   moveVertical,
   normalizeRange,
   isCollapsed,
   paragraphLength,
   paragraphPlainText,
   patchLayoutParagraph,
+  patchLayoutCellParagraph,
   redo,
   replaceMatch,
   saveDocument,
@@ -44,6 +46,8 @@ import { InputProxy } from './input/ime.js'
 import { createCanvasMeasurer, getCaretScreenRect, measureContentSize, paintDocument } from './render/paint.js'
 import { PAGE_GAP_DEFAULT, PAGE_TOP_PAD } from './render/pageLayout.js'
 import { hitTestPoint, wordBounds } from './selection/hitTest.js'
+import { moveByLayoutLine, offsetToX } from './selection/selectionPaint.js'
+import { pageEditableParagraphs } from './selection/hitTest.js'
 
 export type ZoomMode = 'percent' | 'fitWidth' | 'fitPage' | 'twoPages'
 
@@ -125,8 +129,14 @@ export function mountEditor(host: HTMLElement, options: EditorOptions = {}): Edi
   let dragging = false
   let dragMoving = false
   let dragSource: DocRange | undefined
+  // Stable anchor for the active pointer drag (survives rect-selection anchor rewrites).
+  let dragAnchor: DocPosition | undefined
+  // True while dragging a Word-style rectangular multi-cell table selection.
+  let rectSelecting = false
   let preferredCol: number | undefined
+  let preferredX: number | undefined
   let pendingMarks: CharacterProps = {}
+  let selectAllLevel = 0 // 0=none, 1=cell, 2=table, 3=doc (Ctrl+A escalation)
   let lastClickAt = 0
   let lastClickPos: DocPosition | undefined
   let clickCount = 0
@@ -295,7 +305,19 @@ export function mountEditor(host: HTMLElement, options: EditorOptions = {}): Edi
    */
   const renderTyping = (pos: DocPosition) => {
     if (pos.cell) {
-      render()
+      const patched = patchLayoutCellParagraph(
+        doc,
+        layout,
+        pos.sectionIndex,
+        pos.blockIndex,
+        pos.cell,
+        { measurer },
+      )
+      layout = patched.layout
+      paintOnly()
+      scrollCaretIntoView()
+      scheduleNotify()
+      scheduleFullLayout(patched.needsFullLayout ? 48 : 160)
       return
     }
     const patched = patchLayoutParagraph(doc, layout, pos.sectionIndex, pos.blockIndex, { measurer })
@@ -375,6 +397,25 @@ export function mountEditor(host: HTMLElement, options: EditorOptions = {}): Edi
   }
 
   const insertText = (text: string, props?: CharacterProps) => {
+    // Typing over a rectangular multi-cell selection clears every selected cell
+    // then inserts the text in the top-left cell (Word behavior).
+    const rectBounds = rectSelecting ? rectSelectionBounds() : undefined
+    if (rectBounds) {
+      const cleared = buildRectClearOps(rectBounds)
+      if (cleared) {
+        const mergedProps = resolveInsertProps(cleared.caret, props)
+        const ops: EditorOp[] = [
+          ...cleared.ops,
+          { type: 'insertText', position: cleared.caret, text, props: mergedProps },
+        ]
+        const focus: DocPosition = { ...cleared.caret, offset: cleared.caret.offset + text.length }
+        rectSelecting = false
+        caretBlink = true
+        preferredCol = focus.offset
+        commitOps(ops, { anchor: focus, focus }, 'fast')
+        return
+      }
+    }
     const { start } = normalizeRange(selection)
     const ops: EditorOp[] = []
     let caret = selection.focus
@@ -467,7 +508,123 @@ export function mountEditor(host: HTMLElement, options: EditorOptions = {}): Edi
     commitOps(ops, { anchor: next, focus: next })
   }
 
+  /** Last paragraph index of a given table cell (0 when empty/missing). */
+  const lastCellPara = (
+    sectionIndex: number,
+    blockIndex: number,
+    row: number,
+    cell: number,
+  ): number => {
+    const block = doc.sections[sectionIndex]?.blocks[blockIndex]
+    if (block?.type !== 'table') return 0
+    const tc = block.rows[row]?.cells[cell]
+    return Math.max(0, (tc?.blocks.length ?? 1) - 1)
+  }
+
+  /**
+   * Rectangular table-cell selection bounds, when the current selection spans
+   * multiple cells of a single table block. Returns undefined otherwise.
+   */
+  const rectSelectionBounds = ():
+    | { sectionIndex: number; blockIndex: number; r0: number; c0: number; r1: number; c1: number }
+    | undefined => {
+    const { start, end } = normalizeRange(selection)
+    if (!start.cell || !end.cell) return undefined
+    if (start.sectionIndex !== end.sectionIndex || start.blockIndex !== end.blockIndex) {
+      return undefined
+    }
+    if (start.cell.row === end.cell.row && start.cell.cell === end.cell.cell) return undefined
+    return {
+      sectionIndex: start.sectionIndex,
+      blockIndex: start.blockIndex,
+      r0: Math.min(start.cell.row, end.cell.row),
+      c0: Math.min(start.cell.cell, end.cell.cell),
+      r1: Math.max(start.cell.row, end.cell.row),
+      c1: Math.max(start.cell.cell, end.cell.cell),
+    }
+  }
+
+  /**
+   * Build ops that clear the text of every cell in the rectangle, plus the
+   * caret position (top-left cell, first paragraph). deleteRange is applied
+   * per cell paragraph since it cannot cross cells.
+   */
+  const buildRectClearOps = (bounds: {
+    sectionIndex: number
+    blockIndex: number
+    r0: number
+    c0: number
+    r1: number
+    c1: number
+  }): { ops: EditorOp[]; caret: DocPosition } | undefined => {
+    const { sectionIndex, blockIndex, r0, c0, r1, c1 } = bounds
+    const table = doc.sections[sectionIndex]?.blocks[blockIndex]
+    if (table?.type !== 'table') return undefined
+    const ops: EditorOp[] = []
+    for (let row = r0; row <= r1; row++) {
+      const tableRow = table.rows[row]
+      if (!tableRow) continue
+      for (let cell = c0; cell <= c1; cell++) {
+        const tc = tableRow.cells[cell]
+        if (!tc) continue
+        for (let para = 0; para < tc.blocks.length; para++) {
+          const block = tc.blocks[para]
+          if (block?.type !== 'paragraph') continue
+          const len = paragraphLength(block)
+          if (len === 0) continue
+          const from: DocPosition = {
+            sectionIndex,
+            blockIndex,
+            offset: 0,
+            cell: { row, cell, para },
+          }
+          const to: DocPosition = {
+            sectionIndex,
+            blockIndex,
+            offset: len,
+            cell: { row, cell, para },
+          }
+          ops.push({ type: 'deleteRange', range: { anchor: from, focus: to } })
+        }
+      }
+    }
+    const caret: DocPosition = {
+      sectionIndex,
+      blockIndex,
+      offset: 0,
+      cell: { row: r0, cell: c0, para: 0 },
+    }
+    return { ops, caret }
+  }
+
+  /**
+   * When a rectangular multi-cell selection is active, clear every selected
+   * cell's content and collapse the caret to the top-left cell. Returns true
+   * when it handled the delete.
+   */
+  const clearRectSelection = (): boolean => {
+    if (!rectSelecting) return false
+    const bounds = rectSelectionBounds()
+    if (!bounds) {
+      rectSelecting = false
+      return false
+    }
+    const cleared = buildRectClearOps(bounds)
+    rectSelecting = false
+    if (!cleared) return false
+    const after: DocRange = { anchor: cleared.caret, focus: cleared.caret }
+    preferredCol = 0
+    if (cleared.ops.length === 0) {
+      selection = after
+      renderSelection()
+      return true
+    }
+    commitOps(cleared.ops, after)
+    return true
+  }
+
   const deleteBackward = () => {
+    if (clearRectSelection()) return
     const { start, end } = normalizeRange(selection)
     if (
       start.offset !== end.offset ||
@@ -503,6 +660,17 @@ export function mountEditor(host: HTMLElement, options: EditorOptions = {}): Edi
       commitOp({ type: 'mergeParagraphs', position: start }, { anchor: after, focus: after })
       return
     }
+    // At start of first para in a cell — move to previous cell (Word-like), don't delete table
+    if (start.cell && start.cell.para === 0 && start.offset === 0) {
+      const { position } = moveTableCellTab(doc, start, -1)
+      if (
+        position.cell &&
+        (position.cell.row !== start.cell.row || position.cell.cell !== start.cell.cell)
+      ) {
+        setCaret(position, false)
+      }
+      return
+    }
     if (start.blockIndex > 0 && !start.cell) {
       const prev = getParagraph(doc, {
         sectionIndex: start.sectionIndex,
@@ -521,6 +689,7 @@ export function mountEditor(host: HTMLElement, options: EditorOptions = {}): Edi
   }
 
   const deleteForward = () => {
+    if (clearRectSelection()) return
     const { start } = normalizeRange(selection)
     if (!isCollapsed(selection)) {
       commitOp({ type: 'deleteRange', range: selection }, { anchor: start, focus: start }, 'fast')
@@ -800,12 +969,61 @@ export function mountEditor(host: HTMLElement, options: EditorOptions = {}): Edi
     void copySelection(true)
   }
 
+  const caretPreferX = (pos: DocPosition): number | undefined => {
+    for (const page of layout.pages) {
+      for (const para of pageEditableParagraphs(page)) {
+        if (para.sectionIndex !== pos.sectionIndex || para.blockIndex !== pos.blockIndex) continue
+        if (pos.cell || para.cell) {
+          if (
+            !pos.cell ||
+            !para.cell ||
+            pos.cell.row !== para.cell.row ||
+            pos.cell.cell !== para.cell.cell ||
+            pos.cell.para !== para.cell.para
+          ) {
+            continue
+          }
+        }
+        for (let li = 0; li < para.lines.length; li++) {
+          const line = para.lines[li]!
+          const isLast = li === para.lines.length - 1
+          const inLine =
+            pos.offset >= line.startOffset &&
+            (pos.offset < line.endOffset || (pos.offset === line.endOffset && isLast))
+          if (!inLine) continue
+          return offsetToX(line, pos.offset)
+        }
+      }
+    }
+    return undefined
+  }
+
   const setCaret = (pos: DocPosition, extend: boolean) => {
-    if (!extend) clearPendingMarks()
+    rectSelecting = false
+    if (!extend) {
+      clearPendingMarks()
+      selectAllLevel = 0
+    }
     selection = extend ? { anchor: selection.anchor, focus: pos } : { anchor: pos, focus: pos }
     preferredCol = pos.offset
+    preferredX = caretPreferX(pos)
     caretBlink = true
     renderSelection()
+  }
+
+  const moveCaretVertical = (direction: -1 | 1, extend: boolean) => {
+    const focus = selection.focus
+    const x = preferredX ?? caretPreferX(focus)
+    const byLine = moveByLayoutLine(layout, focus, direction, x)
+    if (byLine) {
+      preferredX = x
+      setCaret(byLine, extend)
+      preferredX = x // setCaret overwrites; restore sticky X
+      preferredCol = byLine.offset
+      return
+    }
+    setCaret(moveVertical(doc, focus, direction, preferredCol), extend)
+    if (x !== undefined) preferredX = x
   }
 
   const applyHistory = (dir: 'undo' | 'redo') => {
@@ -814,8 +1032,10 @@ export function mountEditor(host: HTMLElement, options: EditorOptions = {}): Edi
     history = result.history
     if (result.selection) selection = result.selection
     clearPendingMarks()
+    selectAllLevel = 0
     caretBlink = true
     preferredCol = selection.focus.offset
+    preferredX = caretPreferX(selection.focus)
     render()
   }
 
@@ -868,6 +1088,37 @@ export function mountEditor(host: HTMLElement, options: EditorOptions = {}): Edi
     }
     if (e.key === 'Tab') {
       e.preventDefault()
+      if (selection.focus.cell) {
+        const { position, needsNewRow } = moveTableCellTab(doc, selection.focus, e.shiftKey ? -1 : 1)
+        if (needsNewRow) {
+          const before = cloneRange(selection)
+          const afterRow = selection.focus.cell.row
+          const afterPos: DocPosition = {
+            sectionIndex: selection.focus.sectionIndex,
+            blockIndex: selection.focus.blockIndex,
+            offset: 0,
+            cell: { row: afterRow + 1, cell: 0, para: 0 },
+          }
+          ;({ doc, history } = dispatch(
+            doc,
+            history,
+            {
+              type: 'insertRow',
+              sectionIndex: selection.focus.sectionIndex,
+              blockIndex: selection.focus.blockIndex,
+              afterRow,
+            },
+            { before, after: { anchor: afterPos, focus: afterPos } },
+          ))
+          selection = { anchor: afterPos, focus: afterPos }
+          preferredCol = 0
+          selectAllLevel = 0
+          render()
+          return
+        }
+        setCaret(position, false)
+        return
+      }
       insertTab()
       return
     }
@@ -908,12 +1159,12 @@ export function mountEditor(host: HTMLElement, options: EditorOptions = {}): Edi
     }
     if (e.key === 'ArrowUp') {
       e.preventDefault()
-      setCaret(moveVertical(doc, selection.focus, -1, preferredCol), e.shiftKey)
+      moveCaretVertical(-1, e.shiftKey)
       return
     }
     if (e.key === 'ArrowDown') {
       e.preventDefault()
-      setCaret(moveVertical(doc, selection.focus, 1, preferredCol), e.shiftKey)
+      moveCaretVertical(1, e.shiftKey)
       return
     }
   }
@@ -921,10 +1172,13 @@ export function mountEditor(host: HTMLElement, options: EditorOptions = {}): Edi
   const selectAll = () => {
     clearPendingMarks()
     const focus = selection.focus
-    // Word: Ctrl+A in a table cell selects that cell's content first
-    if (focus.cell) {
-      const block = doc.sections[focus.sectionIndex]?.blocks[focus.blockIndex]
-      if (block?.type === 'table') {
+    const block = focus.cell
+      ? doc.sections[focus.sectionIndex]?.blocks[focus.blockIndex]
+      : undefined
+
+    // Word escalation: cell → table → document
+    if (focus.cell && block?.type === 'table') {
+      if (selectAllLevel < 1) {
         const tc = block.rows[focus.cell.row]?.cells[focus.cell.cell]
         if (tc && tc.blocks.length > 0) {
           const lastPara = tc.blocks.length - 1
@@ -942,16 +1196,47 @@ export function mountEditor(host: HTMLElement, options: EditorOptions = {}): Edi
           }
           endPos.offset = paragraphLength(getParagraph(doc, endPos))
           selection = { anchor: startPos, focus: endPos }
+          selectAllLevel = 1
           preferredCol = endPos.offset
           caretBlink = true
           renderSelection()
           return
         }
       }
+      if (selectAllLevel < 2) {
+        let last: { row: number; cell: number; para: number } = { row: 0, cell: 0, para: 0 }
+        for (let r = 0; r < block.rows.length; r++) {
+          for (let c = 0; c < block.rows[r]!.cells.length; c++) {
+            const n = block.rows[r]!.cells[c]!.blocks.length
+            if (n > 0) last = { row: r, cell: c, para: n - 1 }
+          }
+        }
+        const startPos: DocPosition = {
+          sectionIndex: focus.sectionIndex,
+          blockIndex: focus.blockIndex,
+          offset: 0,
+          cell: { row: 0, cell: 0, para: 0 },
+        }
+        const endPos: DocPosition = {
+          sectionIndex: focus.sectionIndex,
+          blockIndex: focus.blockIndex,
+          offset: 0,
+          cell: last,
+        }
+        endPos.offset = paragraphLength(getParagraph(doc, endPos))
+        selection = { anchor: startPos, focus: endPos }
+        selectAllLevel = 2
+        preferredCol = endPos.offset
+        caretBlink = true
+        renderSelection()
+        return
+      }
     }
+
     const start = moveHome(doc, { sectionIndex: 0, blockIndex: 0, offset: 0 }, true)
     const end = moveEnd(doc, start, true)
     selection = { anchor: start, focus: end }
+    selectAllLevel = 3
     renderSelection()
   }
 
@@ -968,6 +1253,7 @@ export function mountEditor(host: HTMLElement, options: EditorOptions = {}): Edi
     host.focus()
     input.focus()
     clearPendingMarks()
+    rectSelecting = false
     const { x, y } = clientToLocal(e)
     const hit = hitTestPoint(layout, x, y, zoom, PAGE_GAP_DEFAULT, pageColumns, host.clientWidth)
     if (!hit) return
@@ -1024,6 +1310,7 @@ export function mountEditor(host: HTMLElement, options: EditorOptions = {}): Edi
     // Drag-move of selected text requires a deliberate drag (handled on pointermove threshold).
     if (!isCollapsed(selection) && e.button === 0 && clickCount === 1) {
       dragging = true
+      dragAnchor = hit.position
       selection = { anchor: hit.position, focus: hit.position }
       preferredCol = hit.position.offset
       canvas.setPointerCapture(e.pointerId)
@@ -1032,6 +1319,7 @@ export function mountEditor(host: HTMLElement, options: EditorOptions = {}): Edi
     }
 
     dragging = true
+    dragAnchor = hit.position
     selection = { anchor: hit.position, focus: hit.position }
     preferredCol = hit.position.offset
     canvas.setPointerCapture(e.pointerId)
@@ -1052,7 +1340,7 @@ export function mountEditor(host: HTMLElement, options: EditorOptions = {}): Edi
     if (!dragging) return
     let focus = hit.position
     // Drag-selecting inside a cell stays in that cell (Word character selection)
-    const a = selection.anchor
+    const a = dragAnchor ?? selection.anchor
     if (a.cell) {
       const sameCell =
         focus.cell &&
@@ -1060,28 +1348,61 @@ export function mountEditor(host: HTMLElement, options: EditorOptions = {}): Edi
         focus.blockIndex === a.blockIndex &&
         focus.cell.row === a.cell.row &&
         focus.cell.cell === a.cell.cell
+      const sameTable =
+        focus.cell &&
+        focus.sectionIndex === a.sectionIndex &&
+        focus.blockIndex === a.blockIndex
       if (sameCell) {
-        focus = hit.position
-      } else {
-        const edge: DocPosition = {
+        // Still inside the anchor cell → ordinary character selection.
+        rectSelecting = false
+        selection = { anchor: a, focus }
+        paintOnly()
+        return
+      }
+      if (sameTable && focus.cell) {
+        // Different cell in the same table → Word-style rectangular cell selection.
+        // Anchor at the start of the top-left cell, focus at the end of the
+        // bottom-right cell's last paragraph.
+        rectSelecting = true
+        const r0 = Math.min(a.cell.row, focus.cell.row)
+        const r1 = Math.max(a.cell.row, focus.cell.row)
+        const c0 = Math.min(a.cell.cell, focus.cell.cell)
+        const c1 = Math.max(a.cell.cell, focus.cell.cell)
+        const topLeft: DocPosition = {
           sectionIndex: a.sectionIndex,
           blockIndex: a.blockIndex,
           offset: 0,
-          cell: { ...a.cell },
+          cell: { row: r0, cell: c0, para: 0 },
         }
-        const para = getParagraph(doc, edge)
-        const len = paragraphLength(para)
-        // Pick near/far edge of the cell paragraph from pointer vs anchor
-        const after =
-          focus.sectionIndex > a.sectionIndex ||
-          (focus.sectionIndex === a.sectionIndex && focus.blockIndex > a.blockIndex) ||
-          (focus.sectionIndex === a.sectionIndex &&
-            focus.blockIndex === a.blockIndex &&
-            focus.cell &&
-            (focus.cell.row > a.cell.row ||
-              (focus.cell.row === a.cell.row && focus.cell.cell > a.cell.cell)))
-        focus = { ...edge, offset: after ? len : 0 }
+        const bottomRight: DocPosition = {
+          sectionIndex: a.sectionIndex,
+          blockIndex: a.blockIndex,
+          offset: 0,
+          cell: { row: r1, cell: c1, para: lastCellPara(a.sectionIndex, a.blockIndex, r1, c1) },
+        }
+        bottomRight.offset = paragraphLength(getParagraph(doc, bottomRight))
+        selection = { anchor: topLeft, focus: bottomRight }
+        paintOnly()
+        return
       }
+      // Dragged out of the table entirely → clamp to the anchor cell edge.
+      rectSelecting = false
+      const edge: DocPosition = {
+        sectionIndex: a.sectionIndex,
+        blockIndex: a.blockIndex,
+        offset: 0,
+        cell: { ...a.cell },
+      }
+      const para = getParagraph(doc, edge)
+      const len = paragraphLength(para)
+      // Pick near/far edge of the cell paragraph from pointer vs anchor
+      const after =
+        focus.sectionIndex > a.sectionIndex ||
+        (focus.sectionIndex === a.sectionIndex && focus.blockIndex > a.blockIndex)
+      focus = { ...edge, offset: after ? len : 0 }
+      selection = { anchor: a, focus }
+      paintOnly()
+      return
     }
     selection = { ...selection, focus }
     paintOnly()
@@ -1145,9 +1466,11 @@ export function mountEditor(host: HTMLElement, options: EditorOptions = {}): Edi
       }
       dragMoving = false
       dragSource = undefined
+      dragAnchor = undefined
       return
     }
     dragging = false
+    dragAnchor = undefined
   }
 
   let editorActive = true

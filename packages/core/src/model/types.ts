@@ -135,6 +135,20 @@ export interface TableProps {
   cellSpacing?: LengthTwips
 }
 
+export interface CellMargin {
+  top?: LengthTwips
+  right?: LengthTwips
+  bottom?: LengthTwips
+  left?: LengthTwips
+}
+
+export interface CellBorders {
+  top?: string
+  bottom?: string
+  left?: string
+  right?: string
+}
+
 export interface TableCellProps {
   widthTwips?: LengthTwips
   shading?: string
@@ -143,6 +157,10 @@ export interface TableCellProps {
   gridSpan?: number
   /** Vertical merge: restart or continue */
   vMerge?: 'restart' | 'continue'
+  /** Cell margins (tcMar) in twips */
+  margin?: CellMargin
+  /** Cell border colors (tcBorders) */
+  borders?: CellBorders
 }
 
 export interface TableCell {
