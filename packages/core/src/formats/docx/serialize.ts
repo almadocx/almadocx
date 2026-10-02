@@ -130,6 +130,47 @@ function paragraphXml(p: Paragraph, imageRels: Map<string, string>): string {
   return `<w:p>${pPrXml(p.props)}${p.runs.map((r) => runXml(r, imageRels)).join('')}</w:p>`
 }
 
+function bordersXml(
+  tag: 'w:tblBorders' | 'w:tcBorders',
+  borders: { [key: string]: string | undefined } | undefined,
+  edges: readonly string[],
+): string {
+  if (!borders) return ''
+  const parts: string[] = []
+  for (const edge of edges) {
+    const color = colorToHex(borders[edge])
+    if (!color) continue
+    parts.push(`<w:${edge} w:val="single" w:sz="4" w:space="0" w:color="${color}"/>`)
+  }
+  if (!parts.length) return ''
+  return `<${tag}>${parts.join('')}</${tag}>`
+}
+
+function tblPrXml(table: Table): string {
+  const parts: string[] = []
+  if (table.props.widthTwips !== undefined) {
+    parts.push(`<w:tblW w:w="${String(table.props.widthTwips)}" w:type="dxa"/>`)
+  }
+  if (table.props.alignment) {
+    parts.push(`<w:jc w:val="${table.props.alignment}"/>`)
+  }
+  parts.push(
+    bordersXml('w:tblBorders', table.props.borders as { [key: string]: string | undefined } | undefined, [
+      'top',
+      'bottom',
+      'left',
+      'right',
+      'insideH',
+      'insideV',
+    ]),
+  )
+  if (table.props.cellSpacing !== undefined) {
+    parts.push(`<w:tblCellSpacing w:w="${String(table.props.cellSpacing)}" w:type="dxa"/>`)
+  }
+  const inner = parts.filter(Boolean).join('')
+  return inner ? `<w:tblPr>${inner}</w:tblPr>` : ''
+}
+
 function tableXml(table: Table, imageRels: Map<string, string>): string {
   const grid =
     table.gridCols?.map((w) => `<w:gridCol w:w="${String(w)}"/>`).join('') ??
@@ -139,6 +180,9 @@ function tableXml(table: Table, imageRels: Map<string, string>): string {
       const cells = row.cells
         .map((cell) => {
           const prParts: string[] = []
+          if (cell.props.widthTwips !== undefined) {
+            prParts.push(`<w:tcW w:w="${String(cell.props.widthTwips)}" w:type="dxa"/>`)
+          }
           if (cell.props.gridSpan && cell.props.gridSpan > 1) {
             prParts.push(`<w:gridSpan w:val="${String(cell.props.gridSpan)}"/>`)
           }
@@ -147,20 +191,46 @@ function tableXml(table: Table, imageRels: Map<string, string>): string {
               cell.props.vMerge === 'continue' ? '<w:vMerge w:val="continue"/>' : '<w:vMerge/>',
             )
           }
+          prParts.push(
+            bordersXml('w:tcBorders', cell.props.borders as { [key: string]: string | undefined } | undefined, [
+              'top',
+              'bottom',
+              'left',
+              'right',
+            ]),
+          )
           if (cell.props.shading) {
             const fill = colorToHex(cell.props.shading) ?? 'FFFFFF'
             prParts.push(`<w:shd w:val="clear" w:fill="${fill}"/>`)
           }
-          const tcPr = prParts.length ? `<w:tcPr>${prParts.join('')}</w:tcPr>` : ''
+          if (cell.props.margin) {
+            const m = cell.props.margin
+            const edges: string[] = []
+            for (const edge of ['top', 'left', 'bottom', 'right'] as const) {
+              const v = m[edge]
+              if (v !== undefined) edges.push(`<w:${edge} w:w="${String(v)}" w:type="dxa"/>`)
+            }
+            if (edges.length) prParts.push(`<w:tcMar>${edges.join('')}</w:tcMar>`)
+          }
+          if (cell.props.vAlign) {
+            prParts.push(`<w:vAlign w:val="${cell.props.vAlign}"/>`)
+          }
+          const tcPrInner = prParts.filter(Boolean).join('')
+          const tcPr = tcPrInner ? `<w:tcPr>${tcPrInner}</w:tcPr>` : ''
           const body = cell.blocks.map((p) => paragraphXml(p, imageRels)).join('')
           return `<w:tc>${tcPr}${body}</w:tc>`
         })
         .join('')
-      const trPr = row.props.header ? '<w:trPr><w:tblHeader/></w:trPr>' : ''
+      const trPrParts: string[] = []
+      if (row.props.header) trPrParts.push('<w:tblHeader/>')
+      if (row.props.heightTwips !== undefined) {
+        trPrParts.push(`<w:trHeight w:val="${String(row.props.heightTwips)}"/>`)
+      }
+      const trPr = trPrParts.length ? `<w:trPr>${trPrParts.join('')}</w:trPr>` : ''
       return `<w:tr>${trPr}${cells}</w:tr>`
     })
     .join('')
-  return `<w:tbl><w:tblGrid>${grid}</w:tblGrid>${rows}</w:tbl>`
+  return `<w:tbl>${tblPrXml(table)}<w:tblGrid>${grid}</w:tblGrid>${rows}</w:tbl>`
 }
 
 function blockXml(block: Block, imageRels: Map<string, string>): string {

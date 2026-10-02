@@ -57,13 +57,29 @@ export class A11yMirror {
       for (const block of section.blocks) {
         if (block.type === 'table') {
           flushList()
-          const table = document.createElement('table')
-          table.setAttribute('role', 'table')
-          for (const row of block.rows) {
-            const tr = document.createElement('tr')
-            for (const cell of row.cells) {
-              const td = document.createElement(row.props.header ? 'th' : 'td')
-              td.textContent = cell.blocks.map((p) => paragraphPlainText(p)).join(' ') || '\u00a0'
+          const table = document.createElement('div')
+          table.setAttribute('role', 'grid')
+          table.setAttribute('aria-label', 'Table')
+          table.setAttribute('aria-rowcount', String(block.rows.length))
+          const colCount = Math.max(0, ...block.rows.map((r) => r.cells.length))
+          table.setAttribute('aria-colcount', String(colCount))
+          for (let ri = 0; ri < block.rows.length; ri++) {
+            const row = block.rows[ri]!
+            const tr = document.createElement('div')
+            tr.setAttribute('role', 'row')
+            tr.setAttribute('aria-rowindex', String(ri + 1))
+            for (let ci = 0; ci < row.cells.length; ci++) {
+              const cell = row.cells[ci]!
+              if (cell.props.vMerge === 'continue') continue
+              const td = document.createElement('div')
+              td.setAttribute('role', 'gridcell')
+              td.setAttribute('aria-rowindex', String(ri + 1))
+              td.setAttribute('aria-colindex', String(ci + 1))
+              if (cell.props.gridSpan && cell.props.gridSpan > 1) {
+                td.setAttribute('aria-colspan', String(cell.props.gridSpan))
+              }
+              td.textContent =
+                cell.blocks.map((p) => paragraphPlainText(p)).join(' ') || '\u00a0'
               tr.appendChild(td)
             }
             table.appendChild(tr)

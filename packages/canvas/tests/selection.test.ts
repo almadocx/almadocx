@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import {
+  cellsInRect,
+  isRectCellSelection,
   lineSelectionSpan,
   paragraphIntersectsSelection,
 } from '../src/selection/selectionPaint.js'
-import type { LayoutParagraph } from '@almadocx/core'
+import type { LayoutParagraph, LayoutTable, LayoutTableCell } from '@almadocx/core'
 
 function fakePara(blockIndex: number, lines: Array<{ start: number; end: number }>): LayoutParagraph {
   return {
@@ -60,5 +62,80 @@ describe('selection precision', () => {
       selStart: 1,
       selEnd: 6,
     })
+  })
+})
+
+function fakeCell(rowIndex: number, cellIndex: number): LayoutTableCell {
+  return {
+    x: cellIndex * 100,
+    y: rowIndex * 40,
+    width: 100,
+    height: 40,
+    paragraphs: [],
+    borderColor: '#000',
+    rowIndex,
+    cellIndex,
+  }
+}
+
+function fakeTable(rows: number, cols: number): LayoutTable {
+  const cells: LayoutTableCell[] = []
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) cells.push(fakeCell(r, c))
+  }
+  return {
+    kind: 'table',
+    blockIndex: 3,
+    sectionIndex: 0,
+    x: 0,
+    y: 0,
+    width: cols * 100,
+    height: rows * 40,
+    cells,
+    startRow: 0,
+    endRow: rows - 1,
+  }
+}
+
+describe('rectangular multi-cell selection', () => {
+  it('detects a multi-cell table selection', () => {
+    const base = { sectionIndex: 0, blockIndex: 3, offset: 0 }
+    // Same cell → not rectangular
+    expect(
+      isRectCellSelection(
+        { ...base, cell: { row: 0, cell: 0, para: 0 } },
+        { ...base, cell: { row: 0, cell: 0, para: 1 } },
+      ),
+    ).toBe(false)
+    // Different column → rectangular
+    expect(
+      isRectCellSelection(
+        { ...base, cell: { row: 0, cell: 0, para: 0 } },
+        { ...base, cell: { row: 0, cell: 2, para: 0 } },
+      ),
+    ).toBe(true)
+    // Different row → rectangular
+    expect(
+      isRectCellSelection(
+        { ...base, cell: { row: 0, cell: 0, para: 0 } },
+        { ...base, cell: { row: 2, cell: 0, para: 0 } },
+      ),
+    ).toBe(true)
+    // No cells (plain body text) → not rectangular
+    expect(isRectCellSelection(base, { ...base, offset: 4 })).toBe(false)
+  })
+
+  it('returns every layout cell inside the inclusive rectangle', () => {
+    const table = fakeTable(3, 3)
+    const inside = cellsInRect(table, 0, 1, 1, 2).map((c) => `${c.rowIndex},${c.cellIndex}`)
+    expect(inside.sort()).toEqual(['0,1', '0,2', '1,1', '1,2'])
+  })
+
+  it('normalizes reversed rectangle bounds', () => {
+    const table = fakeTable(3, 3)
+    const forward = cellsInRect(table, 0, 0, 2, 2)
+    const reversed = cellsInRect(table, 2, 2, 0, 0)
+    expect(reversed.length).toBe(forward.length)
+    expect(forward.length).toBe(9)
   })
 })

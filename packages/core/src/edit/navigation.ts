@@ -208,6 +208,111 @@ export function moveEnd(doc: Document, pos: DocPosition, toDocEnd = false): DocP
 }
 
 /**
+ * Word Tab / Shift+Tab: move to next/previous *cell* (not next paragraph in cell).
+ * Returns needsNewRow when Tabbing from the last cell (caller inserts a row).
+ */
+export function moveTableCellTab(
+  doc: Document,
+  pos: DocPosition,
+  direction: -1 | 1,
+): { position: DocPosition; needsNewRow?: boolean } {
+  const p = clampPosition(doc, pos)
+  const block = doc.sections[p.sectionIndex]?.blocks[p.blockIndex]
+  if (!block || block.type !== 'table' || !p.cell) {
+    return { position: p }
+  }
+  const { row, cell } = p.cell
+  if (direction === 1) {
+    if (cell + 1 < (block.rows[row]?.cells.length ?? 0)) {
+      return {
+        position: withCell({ ...p, offset: 0 }, { row, cell: cell + 1, para: 0 }),
+      }
+    }
+    if (row + 1 < block.rows.length) {
+      return {
+        position: withCell({ ...p, offset: 0 }, { row: row + 1, cell: 0, para: 0 }),
+      }
+    }
+    return { position: p, needsNewRow: true }
+  }
+  // direction -1
+  if (cell > 0) {
+    const prevCell = block.rows[row]!.cells[cell - 1]!
+    const paraIndex = Math.max(0, prevCell.blocks.length - 1)
+    const next = withCell({ ...p, offset: 0 }, { row, cell: cell - 1, para: paraIndex })
+    return { position: { ...next, offset: paragraphLength(getParagraph(doc, next)) } }
+  }
+  if (row > 0) {
+    const prevRow = block.rows[row - 1]!
+    const cellIndex = Math.max(0, prevRow.cells.length - 1)
+    const prevCell = prevRow.cells[cellIndex]!
+    const paraIndex = Math.max(0, prevCell.blocks.length - 1)
+    const next = withCell({ ...p, offset: 0 }, { row: row - 1, cell: cellIndex, para: paraIndex })
+    return { position: { ...next, offset: paragraphLength(getParagraph(doc, next)) } }
+  }
+  return { position: p }
+}
+
+/**
+ * Prefer staying in the same table column (Word Up/Down).
+ * Falls back to adjacentCell reading order when no same-column neighbor.
+ */
+export function moveTableCellVertical(
+  doc: Document,
+  pos: DocPosition,
+  direction: -1 | 1,
+  preferOffset?: number,
+): DocPosition {
+  const p = clampPosition(doc, pos)
+  const block = doc.sections[p.sectionIndex]?.blocks[p.blockIndex]
+  if (!block || block.type !== 'table' || !p.cell) return p
+
+  const { row, cell, para } = p.cell
+  const tc = block.rows[row]?.cells[cell]
+  if (!tc) return p
+
+  // Next/prev paragraph inside the same cell
+  if (direction === 1 && para + 1 < tc.blocks.length) {
+    const next = withCell({ ...p, offset: 0 }, { row, cell, para: para + 1 })
+    const len = paragraphLength(getParagraph(doc, next))
+    return { ...next, offset: Math.max(0, Math.min(preferOffset ?? p.offset, len)) }
+  }
+  if (direction === -1 && para > 0) {
+    const next = withCell({ ...p, offset: 0 }, { row, cell, para: para - 1 })
+    const len = paragraphLength(getParagraph(doc, next))
+    return { ...next, offset: Math.max(0, Math.min(preferOffset ?? p.offset, len)) }
+  }
+
+  // Same column, adjacent row
+  const targetRow = row + direction
+  if (targetRow >= 0 && targetRow < block.rows.length) {
+    const rowCells = block.rows[targetRow]!.cells
+    const ci = Math.max(0, Math.min(cell, rowCells.length - 1))
+    const targetCell = rowCells[ci]!
+    if (targetCell.props.vMerge === 'continue') {
+      // Skip continue cells — walk further in direction
+      return moveTableCellVertical(
+        doc,
+        withCell({ ...p, offset: 0 }, { row: targetRow, cell: ci, para: 0 }),
+        direction,
+        preferOffset,
+      )
+    }
+    const paraIndex = direction === 1 ? 0 : Math.max(0, targetCell.blocks.length - 1)
+    const next = withCell({ ...p, offset: 0 }, { row: targetRow, cell: ci, para: paraIndex })
+    const len = paragraphLength(getParagraph(doc, next))
+    return { ...next, offset: Math.max(0, Math.min(preferOffset ?? p.offset, len)) }
+  }
+
+  const adj = adjacentCell(doc, p, direction)
+  if (adj) {
+    const len = paragraphLength(getParagraph(doc, adj))
+    return { ...adj, offset: Math.max(0, Math.min(preferOffset ?? p.offset, len)) }
+  }
+  return p
+}
+
+/**
  * Vertical movement using layout line metrics when available.
  * Fallback: jump ±1 paragraph / cell.
  */
@@ -219,12 +324,7 @@ export function moveVertical(
 ): DocPosition {
   const p = clampPosition(doc, pos)
   if (p.cell) {
-    const adj = adjacentCell(doc, p, direction)
-    if (adj) {
-      const para = getParagraph(doc, adj)
-      const len = paragraphLength(para)
-      return { ...adj, offset: Math.max(0, Math.min(preferOffset ?? p.offset, len)) }
-    }
+    return moveTableCellVertical(doc, p, direction, preferOffset)
   }
   const section = doc.sections[p.sectionIndex]
   if (!section) return p

@@ -1,6 +1,7 @@
 import type { Document, Paragraph } from '../model/types.js'
 import {
   clampPosition,
+  comparePositions,
   paragraphPlainText,
   type DocPosition,
   type DocRange,
@@ -158,7 +159,47 @@ export function extractPlainRange(doc: Document, range: DocRange): string {
   }
   if (start.blockIndex === end.blockIndex) {
     const block = doc.sections[start.sectionIndex]?.blocks[start.blockIndex]
-    if (!block || block.type !== 'paragraph') return ''
+    if (!block) return ''
+    if (block.type === 'table' && start.cell && end.cell) {
+      // Order endpoints so iteration runs start → end regardless of selection direction.
+      let a = start
+      let b = end
+      if (comparePositions(a, b) > 0) {
+        a = end
+        b = start
+      }
+      const ac = a.cell!
+      const bc = b.cell!
+      const rowTexts: string[] = []
+      for (let ri = ac.row; ri <= bc.row; ri++) {
+        const row = block.rows[ri]
+        if (!row) continue
+        const cStart = ri === ac.row ? ac.cell : 0
+        const cEnd = ri === bc.row ? bc.cell : row.cells.length - 1
+        const cellTexts: string[] = []
+        for (let ci = cStart; ci <= cEnd; ci++) {
+          const cell = row.cells[ci]
+          if (!cell) continue
+          const isStartCell = ri === ac.row && ci === ac.cell
+          const isEndCell = ri === bc.row && ci === bc.cell
+          const pStart = isStartCell ? ac.para : 0
+          const pEnd = isEndCell ? bc.para : cell.blocks.length - 1
+          const paraTexts: string[] = []
+          for (let p = pStart; p <= pEnd; p++) {
+            const para = cell.blocks[p]
+            if (!para) continue
+            const plain = paragraphPlainText(para)
+            const sliceA = isStartCell && p === ac.para ? a.offset : 0
+            const sliceB = isEndCell && p === bc.para ? b.offset : plain.length
+            paraTexts.push(plain.slice(sliceA, sliceB))
+          }
+          cellTexts.push(paraTexts.join('\n'))
+        }
+        rowTexts.push(cellTexts.join('\t'))
+      }
+      return rowTexts.join('\n')
+    }
+    if (block.type !== 'paragraph') return ''
     return paragraphPlainText(block).slice(start.offset, end.offset)
   }
   const section = doc.sections[start.sectionIndex]

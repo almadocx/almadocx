@@ -24,17 +24,11 @@ This is a **pnpm monorepo**. `@almadocx/core` and `@almadocx/canvas` are workspa
 - Fixes: bullet indent bounce, triple Backspace
 - Roadmap: `MILESTONES.md`
 
-## Next: M3 — table interaction parity
+## Next: M4+ (M3 largely shipped on `feat/m3-table-word-parity` / PR #3)
 
-See `MILESTONES.md` § M3. Suggested order:
+M3 table Word-parity is implemented (nav, rect select, structure ops, layout, cell typing patch, ARIA grid). Remaining polish: focus announcements, table style gallery.
 
-1. **M3.1 / M3.2** — harden cell text selection; multi-cell / rectangular selection
-2. **M3.3** — Tab between cells; Up/Down by line metrics *inside* a cell
-3. **M3.4** — `gridSpan` / `vMerge`, borders, padding
-4. **M3.5** — fast typing path inside cells; insert/delete rows & columns
-5. **M3.6** — ARIA grid
-
-Then M4 (styles), M5 (sections/headers), M6 (collab) as listed in milestones.
+Then M4 (styles), M5 (sections/headers), M6 (collab) as listed in `MILESTONES.md`.
 
 ## Architecture
 
