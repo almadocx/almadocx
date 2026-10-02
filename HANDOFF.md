@@ -1,94 +1,63 @@
 # Handoff — continue Almadocx from here
 
-**Last session:** 2026-10-02  
-**Branch:** `fix/typing-perf-undo-selection`  
+**Last updated:** 2026-10-02  
+**Repo:** https://github.com/almadocx/almadocx  
+**Default branch:** `main` (PR #1 merged: `b2117b1`)  
 **Primary fixture:** `fixtures/seamlesshr-golive-plan.docx` (~34 pages, many tables)
 
-Open this file in a new workspace/chat and tell the agent to resume from it.
+Open this repo in a new workspace/chat and say: *Resume from HANDOFF.md — continue M3 table parity.*
 
 ---
 
 ## Product goal
 
-Canvas Word-like DOCX/ODT editor (`~/Projects/almadocx`). Full editing, layout fidelity, UX parity with Microsoft Word.
+Canvas Word-like DOCX/ODT editor. Full editing, layout fidelity, UX parity with Microsoft Word.
 
-## What landed this session
+This is a **pnpm monorepo**. `@almadocx/core` and `@almadocx/canvas` are workspace packages (`packages/*`), not external npm deps.
 
-### Typing performance (priority #1 — done)
-- Cached canvas measurer + measure-text cache
-- `patchLayoutParagraph` fast path for insert/delete (no full reflow every keystroke)
-- Debounced full layout + a11y `onChange`
-- Caret/selection moves paint without layout
-- List indent bug fixed: patch path was double-applying bullet indent every keystroke (“text bouncing right”)
+## Done on main (via #1)
 
-### Undo / redo (done)
-- `HistoryEntry` stores `before` / `after` selection
-- Undo/redo restores caret
-- `setMark` (bold/italic/etc.) is undoable
+- Typing perf: incremental `patchLayoutParagraph`, cached measurer, debounced reflow
+- Undo/redo restores caret; marks are undoable
+- Word-like bold/italic: range-only apply; clear sticky on caret move; inherit left-of-caret
+- Table foundations: cell hit-test, selection over cell fills, in-cell drag-select, Ctrl+A = cell
+- Fixes: bullet indent bounce, triple Backspace
+- Roadmap: `MILESTONES.md`
 
-### Character styles — Word-like (done)
-- Range bold/italic applies **only** to selection; does **not** sticky-persist
-- Pending toggles clear when caret moves (click / arrows)
-- Typing inherits style from character **to the left** of caret
-- Collapsed Ctrl+B/I toggles sticky override until caret moves
+## Next: M3 — table interaction parity
 
-### Tables — partial (M3 in progress)
-- Hit-test: cell box first; horizontal containment when row paras share `y` (fixed “only last column”)
-- Selection highlight paints **above** cell fills (was invisible under shading)
-- Drag-select stays inside starting cell
-- Ctrl+A in a cell selects **that cell’s** content only
-- Full Word table parity is **not** done — see `MILESTONES.md` § M3
+See `MILESTONES.md` § M3. Suggested order:
 
-### Input bugs fixed
-- Backspace deleted 3 chars: keydown was on textarea + host + document → single listener now
+1. **M3.1 / M3.2** — harden cell text selection; multi-cell / rectangular selection
+2. **M3.3** — Tab between cells; Up/Down by line metrics *inside* a cell
+3. **M3.4** — `gridSpan` / `vMerge`, borders, padding
+4. **M3.5** — fast typing path inside cells; insert/delete rows & columns
+5. **M3.6** — ARIA grid
 
-## Known remaining issues / next work
+Then M4 (styles), M5 (sections/headers), M6 (collab) as listed in milestones.
 
-1. **M3 table parity** (current roadmap priority) — `MILESTONES.md`
-   - Multi-cell / rectangular selection
-   - Tab between cells; Up/Down by line metrics inside a cell
-   - Merged cells (`gridSpan` / `vMerge`), borders, padding
-   - Fast typing path inside cells (currently forces full layout)
-2. Toolbar mark buttons should reflect active style at caret (UI not wired)
-3. Pre-existing flaky/failing canvas test: `tests/sanitize.test.ts` “maps bold/italic from html”
-4. Playground may be on **http://localhost:5174/** if 5173 is busy; Vite aliases load `packages/*/src` directly
+## Architecture
 
-## Architecture map
+| Package | Path | Role |
+|---|---|---|
+| `@almadocx/core` | `packages/core` | Model, ops/history, layout, DOCX/ODT |
+| `@almadocx/canvas` | `packages/canvas` | Editor, hit-test, paint, IME |
+| `@almadocx/playground` | `apps/playground` | Demo |
+| `@almadocx/harness` | `apps/harness` | Layout regression |
 
-| Package | Role |
-|---|---|
-| `@almadocx/core` | Model, ops/history, layout (`layout.ts`, `patchLayoutParagraph`), DOCX/ODT |
-| `@almadocx/canvas` | `editor.ts`, hit-test, selection paint, IME, canvas paint |
-| `@almadocx/playground` | Demo app (`pnpm playground` / filter `@almadocx/playground`) |
+## Process
 
-Key files touched recently:
-- `packages/canvas/src/editor.ts` — typing path, history selection, marks, cell select-all, single keydown
-- `packages/canvas/src/selection/hitTest.ts` — table cell targeting
-- `packages/canvas/src/selection/selectionPaint.ts` — selection geometry
-- `packages/canvas/src/render/paint.ts` — paint order (table chrome → selection → text)
-- `packages/core/src/ops/history.ts` — selection on undo/redo
-- `packages/core/src/layout/layout.ts` — patch + list indent fix
-- `MILESTONES.md` — roadmap (M3 tables)
+- Branch from `main` (`fix/…`, `feat/…`); **PR only** — never push straight to `main`
+- Push feature branch → `gh pr create` → merge when asked
 
-## How to run
+## Run
 
 ```bash
+git clone git@github.com:almadocx/almadocx.git
+cd almadocx
 pnpm install
 pnpm --filter @almadocx/core test
-pnpm --filter @almadocx/canvas test   # sanitize bold/italic test may still fail (unrelated)
-pnpm --filter @almadocx/core build && pnpm --filter @almadocx/canvas build
 pnpm --filter @almadocx/playground dev
 ```
 
-Manual checks:
-1. Open GoLive Plan → type on long body text (should feel snappy)
-2. Bullet line: type without text walking right; Backspace deletes one char
-3. Select a word → italic → click into plain text → type (should be plain)
-4. Click next to bold → type (should be bold)
-5. Table ~page 22: click each column; drag-select; Ctrl+A selects cell only
-
-## Agent / process notes
-
-- Almasix repos: **PRs only** — never push to `main`; use `fix/` / `feat/` / `chore/` branches
-- This repo previously had **no commits**; first commit may be on `fix/typing-perf-undo-selection`
-- Do not recreate conversation history; use this file + `MILESTONES.md` + git log
+Manual smoke: GoLive Plan → long-doc typing; bullets; marks; table columns + cell select + Ctrl+A.
