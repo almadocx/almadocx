@@ -1,0 +1,221 @@
+:root {
+  --ink: #1c1814;
+  --ink-muted: #5c534a;
+  --paper: #f3efe6;
+  --panel: #faf7f1;
+  --accent: #0f6a5a;
+  --accent-soft: #d8ebe6;
+  --danger: #8b2e2e;
+  --line: rgba(28, 24, 20, 0.12);
+  --shadow: 0 12px 40px rgba(40, 32, 24, 0.12);
+  --font-display: 'Fraunces', Georgia, serif;
+  --font-ui: 'Source Sans 3', 'Segoe UI', sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  background:
+    radial-gradient(1200px 600px at 10% -10%, #e7f2ee 0%, transparent 55%),
+    radial-gradient(900px 500px at 100% 0%, #f0e6d8 0%, transparent 50%),
+    var(--paper);
+  color: var(--ink);
+  font-family: var(--font-ui);
+}
+
+#app {
+  height: 100%;
+  display: grid;
+  grid-template-rows: auto auto 1fr;
+}
+
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1rem 1.5rem 0.75rem;
+}
+
+.brand {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 1.75rem;
+  letter-spacing: -0.02em;
+  line-height: 1;
+}
+
+.brand span {
+  display: block;
+  margin-top: 0.2rem;
+  font-family: var(--font-ui);
+  font-size: 0.8rem;
+  font-weight: 400;
+  color: var(--ink-muted);
+  letter-spacing: 0.02em;
+}
+
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+  padding: 0.5rem 1.5rem 1rem;
+  border-bottom: 1px solid var(--line);
+  background: color-mix(in srgb, var(--panel) 88%, transparent);
+  backdrop-filter: blur(8px);
+  position: sticky;
+  top: 0;
+  z-index: 2;
+}
+
+.group {
+  display: inline-flex;
+  gap: 0.35rem;
+  align-items: center;
+  padding-right: 0.75rem;
+  margin-right: 0.25rem;
+  border-right: 1px solid var(--line);
+}
+
+.group:last-child {
+  border-right: 0;
+}
+
+button,
+.label-btn {
+  appearance: none;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  color: var(--ink);
+  font: 600 0.85rem/1 var(--font-ui);
+  padding: 0.45rem 0.75rem;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 160ms ease, transform 160ms ease, border-color 160ms ease;
+}
+
+button:hover,
+.label-btn:hover {
+  background: #fff;
+  border-color: color-mix(in srgb, var(--accent) 35%, var(--line));
+}
+
+button:active,
+.label-btn:active {
+  transform: translateY(1px);
+}
+
+button.primary {
+  background: var(--accent);
+  border-color: transparent;
+  color: #f4fffb;
+}
+
+button.primary:hover {
+  background: #0c584b;
+}
+
+button:focus-visible,
+.label-btn:focus-visible,
+.editor-shell:focus-within {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.label-btn input {
+  display: none;
+}
+
+.editor-shell {
+  margin: 0.5rem 0 0;
+  width: 100%;
+  height: calc(100vh - 9rem);
+  min-height: 24rem;
+  background: transparent;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.almadocx-host {
+  flex: 1 1 auto;
+  min-height: 0;
+  height: 100%;
+  background: #e8e4dc;
+  overflow: auto;
+  /* Smooth continuous scroll — avoid scroll-snap which feels like page snapping */
+  scroll-behavior: auto;
+  overscroll-behavior: contain;
+}
+
+.almadocx-spacer {
+  position: relative;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.almadocx-canvas {
+  display: block;
+  touch-action: none;
+  /* Sticky overlay covers the host viewport; pages are painted centered into it */
+  max-width: 100%;
+}
+
+.toast {
+  position: fixed;
+  right: 1rem;
+  bottom: 1rem;
+  background: var(--ink);
+  color: #f7f3ec;
+  padding: 0.75rem 1rem;
+  border-radius: 10px;
+  font-size: 0.9rem;
+  box-shadow: var(--shadow);
+  transform: translateY(120%);
+  opacity: 0;
+  transition: transform 220ms ease, opacity 220ms ease;
+  max-width: min(360px, calc(100vw - 2rem));
+  z-index: 10;
+}
+
+.toast.show {
+  transform: translateY(0);
+  opacity: 1;
+}
+
+.toast.error {
+  background: var(--danger);
+}
+
+.zoom-label {
+  font-size: 0.8rem;
+  color: var(--ink-muted);
+  min-width: 3rem;
+  text-align: center;
+}
+
+.find-group input {
+  font: 400 0.85rem/1.2 var(--font-ui);
+  border: 1px solid var(--line);
+  background: #fff;
+  color: var(--ink);
+  border-radius: 8px;
+  padding: 0.4rem 0.55rem;
+  width: 7.5rem;
+}
+
+.find-group input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
