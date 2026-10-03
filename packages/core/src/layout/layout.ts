@@ -157,11 +157,15 @@ export function layoutDocument(doc: Document, options: LayoutOptions = {}): Layo
         page.header = { paragraphs: [] }
       }
       if (footerSrc) {
+        // Place footer inside the bottom margin. When w:footer is 0, still keep
+        // it on-page using the bottom margin band (Word/LibreOffice behavior).
+        const bottomBand = twipsToPx(margin.bottom, dpi)
+        const footerY = pageH - Math.max(footerBand * 0.85, bottomBand * 0.55, 14)
         page.footer = layoutHeaderFooter(
           doc,
           footerSrc,
           contentX,
-          pageH - footerBand * 0.85,
+          footerY,
           contentWidth,
           ctx,
           index + 1,
@@ -214,11 +218,20 @@ export function layoutDocument(doc: Document, options: LayoutOptions = {}): Layo
             const chunks = splitParagraphWidowAware(laid, contentTop, contentBottom)
             for (let c = 0; c < chunks.length; c++) {
               const chunk = chunks[c]!
-              // fit===0 reflows the whole para to contentTop — must start a new page
-              // or it will paint over content already on this page.
-              const startsNewPage = c > 0 || currentBlocks.length > 0
-              if (startsNewPage && currentBlocks.length > 0) {
-                flushPage()
+              if (c === 0) {
+                // fit===0 reflows the whole para to contentTop — new page required.
+                const wholeMoved =
+                  chunks.length === 1 &&
+                  chunk.y <= contentTop + 0.5 &&
+                  laid.y > contentTop + 0.5
+                if (wholeMoved && currentBlocks.length > 0) {
+                  flushPage()
+                } else if (chunk.y + chunk.height > contentBottom && currentBlocks.length > 0) {
+                  flushPage()
+                  reflowParagraphY(chunk, contentTop)
+                }
+              } else {
+                if (currentBlocks.length > 0) flushPage()
                 reflowParagraphY(chunk, contentTop)
               }
               currentBlocks.push(chunk)
@@ -398,9 +411,11 @@ function splitParagraphWidowAware(
     used += line.height
     fit += 1
   }
-  // Keep at least 2 lines on the next page when splitting (orphan control)
-  if (fit > 0 && para.lines.length - fit < 2 && para.lines.length >= 4) {
-    fit = Math.max(2, para.lines.length - 2)
+  // Keep at least 2 lines on the next page when splitting (orphan control).
+  // For short paragraphs (3 lines), push the whole para rather than leave 1 behind.
+  if (fit > 0 && para.lines.length - fit < 2) {
+    if (para.lines.length >= 4 && fit >= 2) fit = para.lines.length - 2
+    else fit = 0
   }
   // Keep at least 2 lines on current page (widow control)
   if (fit === 1 && para.lines.length >= 3) {
@@ -450,8 +465,11 @@ function layoutParagraphBlock(
   let indentLeft = twipsToPx(pProps.indentLeft ?? 0, ctx.dpi)
   const indentRight = twipsToPx(pProps.indentRight ?? 0, ctx.dpi)
   let indentFirst = twipsToPx(pProps.indentFirstLine ?? 0, ctx.dpi)
-  const spacingBefore = twipsToPx(pProps.spacingBefore ?? 0, ctx.dpi)
-  const spacingAfter = twipsToPx(pProps.spacingAfter ?? 0, ctx.dpi)
+  // Word/LO typically don't honor Normal spacing before/after inside table cells
+  // unless set directly; applying style defaults here over-inflates row heights.
+  const inTable = cellPath !== undefined
+  const spacingBefore = inTable ? 0 : twipsToPx(pProps.spacingBefore ?? 0, ctx.dpi)
+  const spacingAfter = inTable ? 0 : twipsToPx(pProps.spacingAfter ?? 0, ctx.dpi)
   const lineMult =
     pProps.lineSpacingRule === 'auto' || pProps.lineSpacingRule === undefined
       ? (pProps.lineSpacing ?? 1.15)
@@ -485,9 +503,29 @@ function layoutParagraphBlock(
   let offset = 0
   let isFirstLine = true
 
+  const defaultFontSizePt = doc.styles.docDefaults.character.fontSizePt ?? 11
   const flushLine = (endOffset: number) => {
-    const height = Math.max(1, (lineAscent + lineDescent) * lineMult)
-    const baseline = lineAscent
+    // Empty lines still consume a font line box (Word/LO), not 1px.
+    let ascent = lineAscent
+    let descent = lineDescent
+    if (ascent + descent < 1) {
+      const fallbackFont = fontCss(
+        resolveFontFamily(doc.styles.docDefaults.character.fontFamily),
+        defaultFontSizePt,
+        false,
+        false,
+        ctx.dpi,
+      )
+      const m = ctx.measurer.measure(' ', fallbackFont)
+      ascent = m.ascent
+      descent = m.descent
+    }
+    // Canvas metrics omit font external leading; Word/LO auto spacing includes it.
+    // Skip extra leading inside tables — cell row heights are driven by trHeight / content.
+    const fontSizePx = (defaultFontSizePt * ctx.dpi) / 72
+    const leading = inTable ? 0 : Math.max(0, fontSizePx * 0.2)
+    const height = Math.max(1, (ascent + descent + leading) * lineMult)
+    const baseline = ascent
     const firstExtra = isFirstLine ? indentFirst : 0
     const available = width - Math.max(0, firstExtra)
     let originX = x + indentLeft + (isFirstLine ? Math.max(0, indentFirst) : 0)
@@ -513,7 +551,8 @@ function layoutParagraphBlock(
     isFirstLine = false
   }
 
-  for (const run of paragraph.runs) {
+  for (let ri = 0; ri < paragraph.runs.length; ri++) {
+    const run = paragraph.runs[ri]!
     const resolved = resolveRunProps(doc, paragraph, run)
     const font = fontCss(
       resolveFontFamily(resolved.fontFamily),
@@ -555,10 +594,46 @@ function layoutParagraphBlock(
 
     if (run.content.type === 'tab') {
       const contentWidthTwips = pxToTwips(width, ctx.dpi)
-      const currentTwips = pxToTwips(lineWidth, ctx.dpi)
-      const stop = nextTabStopTwips(currentTwips, pProps.tabs, contentWidthTwips)
-      const targetX = twipsToPx(stop.position, ctx.dpi)
-      const w = Math.max(twipsToPx(36, ctx.dpi), targetX - lineWidth)
+      const resolveTab = (): {
+        targetX: number
+        leader: ReturnType<typeof nextTabStopTwips>['leader']
+        alignment: ReturnType<typeof nextTabStopTwips>['alignment']
+      } => {
+        const currentTwips = pxToTwips(lineWidth, ctx.dpi)
+        const stop = nextTabStopTwips(currentTwips, pProps.tabs, contentWidthTwips)
+        let targetX = twipsToPx(stop.position, ctx.dpi)
+        // Right/center tabs align the following text (until next tab) to the stop.
+        if (stop.alignment === 'right' || stop.alignment === 'center') {
+          let followW = 0
+          for (let rj = ri + 1; rj < paragraph.runs.length; rj++) {
+            const next = paragraph.runs[rj]!
+            if (next.content.type === 'tab' || next.content.type === 'break') break
+            if (next.content.type !== 'text') continue
+            const nr = resolveRunProps(doc, paragraph, next)
+            const nf = fontCss(
+              resolveFontFamily(nr.fontFamily),
+              nr.fontSizePt ?? 11,
+              nr.bold,
+              nr.italic,
+              ctx.dpi,
+            )
+            followW += ctx.measurer.measure(next.content.text, nf).width
+          }
+          if (stop.alignment === 'right') targetX -= followW
+          else targetX -= followW / 2
+        }
+        return { targetX, leader: stop.leader, alignment: stop.alignment }
+      }
+
+      let { targetX, leader } = resolveTab()
+      let w = Math.max(0, Math.min(targetX, width) - lineWidth)
+      // Word wraps when a tab cannot advance (at/past the right edge), then
+      // continues tabbing on the next line — critical for form underline runs.
+      if ((w < 0.5 || targetX > width + 0.5) && lineRuns.length > 0) {
+        flushLine(offset)
+        ;({ targetX, leader } = resolveTab())
+        w = Math.max(0, Math.min(targetX, width) - lineWidth)
+      }
       const metrics = ctx.measurer.measure(' ', font)
       lineRuns.push({
         text: '\t',
@@ -567,9 +642,12 @@ function layoutParagraphBlock(
         font,
         color,
         startOffset: offset,
-        tabLeader: stop.leader,
+        tabLeader: leader,
         ...(resolved.bold ? { bold: true } : {}),
         ...(resolved.italic ? { italic: true } : {}),
+        // Form fields often underline tab runs to draw fill-in lines.
+        ...(resolved.underline ? { underline: true } : {}),
+        ...(resolved.strike ? { strike: true } : {}),
       })
       lineWidth += w
       lineAscent = Math.max(lineAscent, metrics.ascent)
@@ -741,6 +819,9 @@ function layoutTableBlock(
   ctx: Ctx,
   startRow = 0,
 ): LayoutTable {
+  const indent = twipsToPx(table.props.indentTwips ?? 0, ctx.dpi)
+  const tableX = x + indent
+  const tableWidth = Math.max(8, maxWidth - indent)
   const colCount = Math.max(...table.rows.map((r) => r.cells.reduce((n, c) => n + (c.props.gridSpan ?? 1), 0)), 1)
   const rawGrid =
     table.gridCols && table.gridCols.length > 0
@@ -749,10 +830,10 @@ function layoutTableBlock(
   const grid =
     rawGrid.length >= colCount
       ? rawGrid.slice(0, colCount)
-      : Array.from({ length: colCount }, (_, i) => rawGrid[i] ?? maxWidth / colCount)
+      : Array.from({ length: colCount }, (_, i) => rawGrid[i] ?? tableWidth / colCount)
 
   const totalGrid = grid.reduce((a, b) => a + b, 0) || 1
-  const scale = maxWidth / totalGrid
+  const scale = tableWidth / totalGrid
   const colWidths = grid.map((w) => w * scale)
 
   const cells: LayoutTableCell[] = []
@@ -793,7 +874,7 @@ function layoutTableBlock(
         col += span
         continue
       }
-      let cellX = x
+      let cellX = tableX
       for (let i = 0; i < col; i++) cellX += colWidths[i]!
       let cellW = 0
       for (let i = col; i < col + span; i++) cellW += colWidths[i]!
@@ -827,7 +908,6 @@ function layoutTableBlock(
       const cellH = Math.max(
         contentHeight + marginTop + marginBottom,
         twipsToPx(row.props.heightTwips ?? 0, ctx.dpi),
-        24,
       )
       rowHeight = Math.max(rowHeight, cellH)
       const laidCell: LayoutTableCell = {
@@ -849,7 +929,8 @@ function layoutTableBlock(
         marginBottom,
         contentHeight,
         isRestart: cell.props.vMerge === 'restart',
-        ...(cell.props.vAlign ? { vAlign: cell.props.vAlign } : {}),
+        // Merged cells default to center vertical alignment (Word/LO).
+        vAlign: cell.props.vAlign ?? (cell.props.vMerge === 'restart' ? 'center' : 'top'),
       }
       rowMeta.push(meta)
       allMeta.push(meta)
@@ -891,9 +972,9 @@ function layoutTableBlock(
     kind: 'table',
     sectionIndex,
     blockIndex,
-    x,
+    x: tableX,
     y,
-    width: maxWidth,
+    width: tableWidth,
     height: rowY - y + 8,
     cells,
     startRow,

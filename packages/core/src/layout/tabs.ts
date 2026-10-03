@@ -11,21 +11,31 @@ export function nextTabStopTwips(
   currentXTwips: number,
   tabs: TabStop[] | undefined,
   contentWidthTwips: number,
-): { position: number; leader: NonNullable<TabStop['leader']> } {
+): {
+  position: number
+  leader: NonNullable<TabStop['leader']>
+  alignment: NonNullable<TabStop['alignment']>
+} {
   const stops = [...(tabs ?? [])].sort((a, b) => a.position - b.position)
   for (const stop of stops) {
     if (stop.position > currentXTwips + 1) {
       return {
         position: Math.min(stop.position, contentWidthTwips),
         leader: stop.leader ?? 'none',
+        alignment: stop.alignment ?? 'left',
       }
     }
   }
-  // Default every 0.5"
+  // Default every 0.5". When past the last stop on the line, return a position
+  // beyond contentWidth so layout can wrap and retry on the next line.
   const next = Math.ceil((currentXTwips + 1) / DEFAULT_TAB_TWIPS) * DEFAULT_TAB_TWIPS
+  if (next > contentWidthTwips && currentXTwips >= contentWidthTwips - 1) {
+    return { position: next, leader: 'none', alignment: 'left' }
+  }
   return {
     position: Math.min(next, Math.max(currentXTwips, contentWidthTwips)),
     leader: 'none',
+    alignment: 'left',
   }
 }
 

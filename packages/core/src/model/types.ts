@@ -133,6 +133,8 @@ export interface TableProps {
   alignment?: 'left' | 'center' | 'right'
   borders?: TableBorders
   cellSpacing?: LengthTwips
+  /** Table left indent (tblInd) in twips */
+  indentTwips?: LengthTwips
 }
 
 export interface CellMargin {
@@ -247,6 +249,8 @@ export interface StyleSheet {
     paragraph: ParagraphProps
     character: CharacterProps
   }
+  /** Style marked `w:default="1"` (usually Normal); used when a paragraph omits pStyle. */
+  defaultParagraphStyle?: StyleId
   paragraphStyles: Record<StyleId, ParagraphStyle>
   characterStyles: Record<StyleId, CharacterStyle>
 }

@@ -93,13 +93,19 @@ function resolveCharacterStyleChain(doc: Document, styleId: StyleId | undefined)
  * Document defaults → paragraph style → paragraph direct → character style → run direct.
  * Styles are never flattened on import; this resolves at read/layout time.
  */
+function effectiveParagraphStyleId(doc: Document, paragraph: Paragraph): StyleId | undefined {
+  return paragraph.props.styleId ?? doc.styles.defaultParagraphStyle ?? 'Normal'
+}
+
 export function resolveParagraphProps(doc: Document, paragraph: Paragraph): ParagraphProps {
-  const fromStyle = resolveParagraphStyleChain(doc, paragraph.props.styleId)
+  const styleId = effectiveParagraphStyleId(doc, paragraph)
+  const fromStyle = resolveParagraphStyleChain(doc, styleId)
   return mergePara(mergePara(doc.styles.docDefaults.paragraph, fromStyle), paragraph.props)
 }
 
 export function resolveRunProps(doc: Document, paragraph: Paragraph, run: Run): CharacterProps {
-  const paraStyleChar = resolveParagraphCharStyleChain(doc, paragraph.props.styleId)
+  const styleId = effectiveParagraphStyleId(doc, paragraph)
+  const paraStyleChar = resolveParagraphCharStyleChain(doc, styleId)
   const charStyle = resolveCharacterStyleChain(doc, run.styleId)
   return mergeChar(
     mergeChar(mergeChar(doc.styles.docDefaults.character, paraStyleChar), charStyle),
