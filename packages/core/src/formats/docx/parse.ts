@@ -17,7 +17,15 @@ import {
 } from '../../model/types.js'
 import { createTextRun } from '../../model/text.js'
 import { isMacroPath, readZip, zipText, type ZipEntries } from '../../io/zip.js'
-import { asArray, parseXml, xmlAttrAlt, xmlText, xmlAttrAltOr } from '../../io/xml.js'
+import {
+  asArray,
+  orderedElement,
+  parseXml,
+  parseXmlOrdered,
+  xmlAttrAlt,
+  xmlAttrAltOr,
+  xmlText,
+} from '../../io/xml.js'
 import { nextId } from '../../util/id.js'
 import { assert } from '../../util/assert.js'
 import { parseNumberingXml } from './numbering.js'
@@ -143,6 +151,38 @@ function parseParagraphProps(pPr: Record<string, unknown> | undefined): Paragrap
       }
     }
   }
+  const tabsNode = findChild(pPr, 'tabs') as Record<string, unknown> | undefined
+  if (tabsNode) {
+    const tabs: NonNullable<ParagraphProps['tabs']> = []
+    for (const t of findChildren(tabsNode, 'tab')) {
+      const tn = t as Record<string, unknown>
+      const pos = xmlAttrAlt(tn, 'w:pos', 'pos')
+      if (pos === undefined) continue
+      const val = xmlAttrAlt(tn, 'w:val', 'val') ?? 'left'
+      const alignment =
+        val === 'center' || val === 'right' || val === 'decimal' || val === 'left'
+          ? val
+          : 'left'
+      const leaderRaw = xmlAttrAlt(tn, 'w:leader', 'leader')
+      const leader =
+        leaderRaw === 'dot' ||
+        leaderRaw === 'hyphen' ||
+        leaderRaw === 'underscore' ||
+        leaderRaw === 'middleDot'
+          ? leaderRaw === 'hyphen'
+            ? 'dash'
+            : leaderRaw === 'middleDot'
+              ? 'dot'
+              : leaderRaw
+          : 'none'
+      tabs.push({
+        position: Number(pos),
+        alignment,
+        leader: leader === 'underscore' ? 'underscore' : leader === 'dash' ? 'dash' : leader === 'dot' ? 'dot' : 'none',
+      })
+    }
+    if (tabs.length) props.tabs = tabs
+  }
   const numPr = findChild(pPr, 'numPr') as Record<string, unknown> | undefined
   if (numPr) {
     const ilvlNode = findChild(numPr, 'ilvl') as Record<string, unknown> | undefined
@@ -183,6 +223,9 @@ function parseRun(rNode: Record<string, unknown>, doc?: Document, rels?: Map<str
       runs.push({ id: nextId('r'), props, content: { type: 'break', breakType } })
     } else if (name === 'drawing' && doc && rels) {
       const img = parseDrawingImage(value, doc, rels)
+      if (img) runs.push({ id: nextId('r'), props, content: img })
+    } else if (name === 'pict' && doc && rels) {
+      const img = parsePictImage(value, doc, rels)
       if (img) runs.push({ id: nextId('r'), props, content: img })
     } else if (name === 'instrText') {
       const instr = xmlText(value).trim().toUpperCase()
@@ -242,6 +285,46 @@ function parseDrawingImage(
     return { type: 'image', mediaId, widthTwips, heightTwips }
   }
   return undefined
+}
+
+/** Legacy VML `<w:pict>` / `<v:imagedata r:id="…">` with `style="width:…pt;height:…pt"`. */
+function parsePictImage(
+  pict: unknown,
+  doc: Document,
+  rels: Map<string, string>,
+): Extract<Run['content'], { type: 'image' }> | undefined {
+  const blob = JSON.stringify(pict)
+  const rid =
+    /"@_r:id":"([^"]+)"/.exec(blob)?.[1] ??
+    /"@_id":"(rId[^"]+)"/.exec(blob)?.[1]
+  if (!rid) return undefined
+  const target = rels.get(rid)
+  if (!target) return undefined
+  const path = target.startsWith('/') ? target.slice(1) : `word/${target.replace(/^\.\.\//, '')}`
+  let mediaPath = path.replace(/\\/g, '/')
+  if (!mediaPath.startsWith('word/')) mediaPath = `word/${mediaPath}`
+
+  const style = /"@_style":"([^"]+)"/.exec(blob)?.[1] ?? ''
+  const widthPt = Number(/width\s*:\s*([\d.]+)\s*pt/i.exec(style)?.[1] ?? '72')
+  const heightPt = Number(/height\s*:\s*([\d.]+)\s*pt/i.exec(style)?.[1] ?? '72')
+  const widthTwips = Math.max(1, Math.round(widthPt * 20))
+  const heightTwips = Math.max(1, Math.round(heightPt * 20))
+
+  const part = [
+    ...doc.package.preservedParts,
+    ...Object.values(doc.media).map((m) => ({ path: m.path!, bytes: m.bytes })),
+  ].find((p) => {
+    const leaf = mediaPath.split('/').pop()!
+    return p.path === mediaPath || p.path.endsWith(leaf)
+  })
+  const mediaId = nextId('img')
+  doc.media[mediaId] = {
+    id: mediaId,
+    contentType: 'image/png',
+    bytes: part ? part.bytes : new Uint8Array(),
+    path: mediaPath,
+  }
+  return { type: 'image', mediaId, widthTwips, heightTwips }
 }
 
 function parseParagraph(
@@ -314,6 +397,12 @@ function parseTableProps(tblPr: Record<string, unknown> | undefined): Table['pro
   const tblBorders = findChild(tblPr, 'tblBorders') as Record<string, unknown> | undefined
   const borderColors = parseBordersColors(tblBorders, ['top', 'bottom', 'left', 'right', 'insideH', 'insideV'])
   if (Object.keys(borderColors).length) props.borders = borderColors
+  const tblInd = findChild(tblPr, 'tblInd') as Record<string, unknown> | undefined
+  if (tblInd) {
+    const w = xmlAttrAlt(tblInd, 'w:w', 'w')
+    const type = xmlAttrAlt(tblInd, 'w:type', 'type')
+    if (w && type !== 'pct') props.indentTwips = Number(w)
+  }
   const tblCellSpacing = findChild(tblPr, 'tblCellSpacing') as Record<string, unknown> | undefined
   if (tblCellSpacing) {
     const w = xmlAttrAlt(tblCellSpacing, 'w:w', 'w')
@@ -354,7 +443,7 @@ function parseTable(tblNode: Record<string, unknown>, doc: Document, rels: Map<s
       const gridSpanNode = tcPr
         ? (findChild(tcPr, 'gridSpan') as Record<string, unknown> | undefined)
         : undefined
-      const vMergeNode = tcPr ? (findChild(tcPr, 'vMerge') as Record<string, unknown> | undefined) : undefined
+      const vMergeRaw = tcPr ? findChild(tcPr, 'vMerge') : undefined
       const vAlignNode = tcPr ? (findChild(tcPr, 'vAlign') as Record<string, unknown> | undefined) : undefined
       const tcWNode = tcPr ? (findChild(tcPr, 'tcW') as Record<string, unknown> | undefined) : undefined
       const tcMarNode = tcPr ? (findChild(tcPr, 'tcMar') as Record<string, unknown> | undefined) : undefined
@@ -382,9 +471,13 @@ function parseTable(tblNode: Record<string, unknown>, doc: Document, rels: Map<s
       }
       const span = xmlAttrAlt(gridSpanNode, 'w:val', 'val')
       if (span) cell.props.gridSpan = Number(span)
-      if (vMergeNode) {
-        const vm = xmlAttrAlt(vMergeNode, 'w:val', 'val')
-        cell.props.vMerge = vm === 'continue' ? 'continue' : 'restart'
+      if (vMergeRaw !== undefined && vMergeRaw !== null && vMergeRaw !== false) {
+        // OOXML: omitted val (empty `<w:vMerge/>`) or val="continue" → continue; only "restart" starts a merge.
+        const vm =
+          typeof vMergeRaw === 'object'
+            ? xmlAttrAlt(vMergeRaw as Record<string, unknown>, 'w:val', 'val')
+            : undefined
+        cell.props.vMerge = vm === 'restart' ? 'restart' : 'continue'
       }
       if (vAlignNode) {
         const va = xmlAttrAlt(vAlignNode, 'w:val', 'val')
@@ -506,24 +599,22 @@ function parseStyles(stylesXml: string | undefined, doc: Document): void {
   if (!stylesXml) return
   const root = parseXml(stylesXml) as Record<string, unknown>
   const stylesRoot = (findChild(root, 'styles') ?? root) as Record<string, unknown>
+
+  // Replace editor seeds with package defaults (empty pPrDefault must clear, not keep seeds).
+  doc.styles.docDefaults = { paragraph: {}, character: {} }
+
   const docDefaults = findChild(stylesRoot, 'docDefaults') as Record<string, unknown> | undefined
   if (docDefaults) {
     const rPrDefault = findChild(docDefaults, 'rPrDefault') as Record<string, unknown> | undefined
     const rPr = rPrDefault
       ? (findChild(rPrDefault, 'rPr') as Record<string, unknown> | undefined)
       : undefined
-    doc.styles.docDefaults.character = {
-      ...doc.styles.docDefaults.character,
-      ...parseRunProps(rPr),
-    }
+    doc.styles.docDefaults.character = parseRunProps(rPr)
     const pPrDefault = findChild(docDefaults, 'pPrDefault') as Record<string, unknown> | undefined
     const pPr = pPrDefault
       ? (findChild(pPrDefault, 'pPr') as Record<string, unknown> | undefined)
       : undefined
-    doc.styles.docDefaults.paragraph = {
-      ...doc.styles.docDefaults.paragraph,
-      ...parseParagraphProps(pPr),
-    }
+    doc.styles.docDefaults.paragraph = parseParagraphProps(pPr)
   }
 
   for (const styleNode of findChildren(stylesRoot, 'style')) {
@@ -539,6 +630,7 @@ function parseStyles(stylesXml: string | undefined, doc: Document): void {
       : undefined
     const pPr = findChild(s, 'pPr') as Record<string, unknown> | undefined
     const rPr = findChild(s, 'rPr') as Record<string, unknown> | undefined
+    const isDefault = xmlAttrAlt(s, 'w:default', 'default') === '1'
 
     if (type === 'paragraph' || type === undefined) {
       const style: (typeof doc.styles.paragraphStyles)[string] = {
@@ -549,6 +641,7 @@ function parseStyles(stylesXml: string | undefined, doc: Document): void {
       }
       if (basedOn !== undefined) style.basedOn = basedOn
       doc.styles.paragraphStyles[styleId] = style
+      if (isDefault) doc.styles.defaultParagraphStyle = styleId
     } else if (type === 'character') {
       const style: (typeof doc.styles.characterStyles)[string] = {
         id: styleId,
@@ -558,6 +651,9 @@ function parseStyles(stylesXml: string | undefined, doc: Document): void {
       if (basedOn !== undefined) style.basedOn = basedOn
       doc.styles.characterStyles[styleId] = style
     }
+  }
+  if (!doc.styles.defaultParagraphStyle && doc.styles.paragraphStyles.Normal) {
+    doc.styles.defaultParagraphStyle = 'Normal'
   }
 }
 
@@ -614,36 +710,59 @@ export function parseDocx(bytes: Uint8Array): Document {
     if (item.path) mediaByPath.set(item.path, id)
   }
 
-  const root = parseXml(documentXml) as Record<string, unknown>
-  const document = findChild(root, 'document') as Record<string, unknown> | undefined
-  assert(document, 'docx_missing', 'w:document is required')
-  const body = findChild(document, 'body') as Record<string, unknown> | undefined
-  assert(body, 'docx_missing', 'w:body is required')
-
-  const blocks: Block[] = []
-  for (const [key, value] of Object.entries(body)) {
-    const name = local(key)
-    if (name === 'p') {
-      for (const p of asArray(value as never)) {
-        const para = parseParagraph(p as Record<string, unknown>, doc, rels)
-        // Remap image mediaIds created during parse to path-based media
-        for (const run of para.runs) {
-          if (run.content.type !== 'image') continue
-          const item = doc.media[run.content.mediaId]
-          if (item?.path && mediaByPath.has(item.path)) {
-            const realId = mediaByPath.get(item.path)!
-            if (realId !== run.content.mediaId) {
-              delete doc.media[run.content.mediaId]
-              run.content.mediaId = realId
-            }
+  // preserveOrder keeps w:p / w:tbl interleaved (classic parse groups by tag and breaks forms).
+  const orderedRoot = parseXmlOrdered(documentXml)
+  assert(Array.isArray(orderedRoot), 'docx_missing', 'w:document is required')
+  let documentChildren: unknown[] | undefined
+  for (const item of orderedRoot as unknown[]) {
+    const el = orderedElement(item)
+    if (el?.name === 'document') {
+      // el.node is collapsed — recover ordered body from the raw item instead
+      const raw = item as Record<string, unknown>
+      const docTag = Object.keys(raw).find((k) => k !== ':@')
+      const docKids = docTag ? raw[docTag] : undefined
+      if (Array.isArray(docKids)) {
+        for (const dChild of docKids) {
+          const dEl = orderedElement(dChild)
+          if (dEl?.name === 'body') {
+            const bodyRaw = dChild as Record<string, unknown>
+            const bodyTag = Object.keys(bodyRaw).find((k) => k !== ':@')
+            const bodyKids = bodyTag ? bodyRaw[bodyTag] : undefined
+            if (Array.isArray(bodyKids)) documentChildren = bodyKids
           }
         }
-        blocks.push(para)
       }
-    } else if (name === 'tbl') {
-      for (const t of asArray(value as never)) {
-        blocks.push(parseTable(t as Record<string, unknown>, doc, rels))
+    }
+  }
+  assert(documentChildren, 'docx_missing', 'w:body is required')
+
+  const blocks: Block[] = []
+  let sectPrNode: Record<string, unknown> | undefined
+  const remapImageMedia = (para: Paragraph) => {
+    for (const run of para.runs) {
+      if (run.content.type !== 'image') continue
+      const item = doc.media[run.content.mediaId]
+      if (item?.path && mediaByPath.has(item.path)) {
+        const realId = mediaByPath.get(item.path)!
+        if (realId !== run.content.mediaId) {
+          delete doc.media[run.content.mediaId]
+          run.content.mediaId = realId
+        }
       }
+    }
+  }
+
+  for (const child of documentChildren) {
+    const el = orderedElement(child)
+    if (!el) continue
+    if (el.name === 'p') {
+      const para = parseParagraph(el.node, doc, rels)
+      remapImageMedia(para)
+      blocks.push(para)
+    } else if (el.name === 'tbl') {
+      blocks.push(parseTable(el.node, doc, rels))
+    } else if (el.name === 'sectPr') {
+      sectPrNode = el.node
     }
   }
   if (blocks.length === 0) {
@@ -657,7 +776,7 @@ export function parseDocx(bytes: Uint8Array): Document {
 
   const section: Section = {
     id: 'sect_1',
-    properties: parseSectPr(findChild(body, 'sectPr') as Record<string, unknown> | undefined),
+    properties: parseSectPr(sectPrNode),
     blocks,
   }
 

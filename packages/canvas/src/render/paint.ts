@@ -22,6 +22,8 @@ export interface PaintOptions {
   virtualized?: boolean
   /** Side-by-side page columns (Word "Multiple pages"). */
   pageColumns?: number
+  /** Draw drop shadow + page edge stroke (editor chrome). Default true. */
+  pageChrome?: boolean
 }
 
 export interface ContentSize {
@@ -79,6 +81,7 @@ export function paintDocument(
     ctx.translate(-vp.scrollLeft, -vp.scrollTop)
     paintPages(ctx, layout, selection, zoom, pageGap, metrics, viewportWidth, {
       caretVisible,
+      pageChrome: options.pageChrome !== false,
       ...(images ? { images } : {}),
       clipTop: vp.scrollTop - pageGap * zoom,
       clipBottom: vp.scrollTop + vp.height + pageGap * zoom,
@@ -106,6 +109,7 @@ export function paintDocument(
     ctx.fillRect(0, 0, frameW, totalHeight)
     paintPages(ctx, layout, selection, zoom, pageGap, metrics, frameW, {
       caretVisible,
+      pageChrome: options.pageChrome !== false,
       ...(images ? { images } : {}),
     })
   }
@@ -124,6 +128,7 @@ function paintPages(
   viewportWidth: number,
   opts: {
     caretVisible: boolean
+    pageChrome?: boolean
     images?: Map<string, CanvasImageSource>
     clipTop?: number
     clipBottom?: number
@@ -147,13 +152,18 @@ function paintPages(
 
     if (!visible) continue
 
-    ctx.fillStyle = 'rgba(40, 32, 24, 0.10)'
-    ctx.fillRect(pageLeft + 2 * zoom, pageTop + 2 * zoom, page.width * zoom, page.height * zoom)
-    ctx.fillStyle = '#fffcf7'
+    const chrome = opts.pageChrome !== false
+    if (chrome) {
+      ctx.fillStyle = 'rgba(40, 32, 24, 0.10)'
+      ctx.fillRect(pageLeft + 2 * zoom, pageTop + 2 * zoom, page.width * zoom, page.height * zoom)
+    }
+    ctx.fillStyle = '#ffffff'
     ctx.fillRect(pageLeft, pageTop, page.width * zoom, page.height * zoom)
-    ctx.strokeStyle = 'rgba(40, 32, 24, 0.08)'
-    ctx.lineWidth = 1
-    ctx.strokeRect(pageLeft + 0.5, pageTop + 0.5, page.width * zoom - 1, page.height * zoom - 1)
+    if (chrome) {
+      ctx.strokeStyle = 'rgba(40, 32, 24, 0.08)'
+      ctx.lineWidth = 1
+      ctx.strokeRect(pageLeft + 0.5, pageTop + 0.5, page.width * zoom - 1, page.height * zoom - 1)
+    }
 
     ctx.save()
     ctx.translate(pageLeft, pageTop)
@@ -228,8 +238,27 @@ function paintParagraph(
     ctx.fillText(para.marker.text, para.marker.x, baseline)
   }
   for (const line of para.lines) {
+    // Merge consecutive underlined runs so form fill-in lines don't show hairline gaps.
+    let ulStart: number | null = null
+    let ulEnd = 0
+    let ulColor = '#000000'
+    const flushUnderline = () => {
+      if (ulStart === null || ulEnd <= ulStart) {
+        ulStart = null
+        return
+      }
+      ctx.strokeStyle = ulColor
+      ctx.lineWidth = 1
+      ctx.beginPath()
+      const uy = line.y + line.baseline + 1.5
+      ctx.moveTo(ulStart, uy)
+      ctx.lineTo(ulEnd, uy)
+      ctx.stroke()
+      ulStart = null
+    }
     for (const run of line.runs) {
       if (run.image) {
+        flushUnderline()
         const src = images?.get(run.image.mediaId)
         const y = line.y + line.baseline - run.image.height * 0.85
         if (src) {
@@ -248,15 +277,18 @@ function paintParagraph(
       const x = run.x
       const y = line.y + line.baseline
       if (run.text && run.text !== '\t') ctx.fillText(run.text, x, y)
-      if (run.underline) {
-        ctx.strokeStyle = run.color
-        ctx.beginPath()
-        ctx.moveTo(x, y + 2)
-        ctx.lineTo(x + run.width, y + 2)
-        ctx.stroke()
+      if (run.underline && run.width > 0) {
+        if (ulStart === null) {
+          ulStart = x
+          ulColor = run.color
+        }
+        ulEnd = x + run.width
+      } else {
+        flushUnderline()
       }
       if (run.strike) {
         ctx.strokeStyle = run.color
+        ctx.lineWidth = 1
         ctx.beginPath()
         const mid = line.y + line.height / 2
         ctx.moveTo(x, mid)
@@ -265,6 +297,7 @@ function paintParagraph(
       }
       if (run.tabLeader && run.tabLeader !== 'none') {
         ctx.strokeStyle = run.color
+        ctx.lineWidth = 1
         ctx.beginPath()
         const yDot = line.y + line.baseline + 1
         if (run.tabLeader === 'dot') {
@@ -284,6 +317,7 @@ function paintParagraph(
         }
       }
     }
+    flushUnderline()
   }
 }
 
